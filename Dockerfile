@@ -7,23 +7,24 @@ ENV WINEPREFIX=/root/.wine
 ENV WINEARCH=win64
 ENV WINEDEBUG=-all
 
-# 1. Install prerequisites, add WineHQ keys, and install X11 + clipboard manager
-RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
+# 1. Correct WineHQ Installation & Replace x11vnc/Xvfb with TigerVNC
+RUN dpkg --add-architecture i386 && \
+    mkdir -pm755 /etc/apt/keyrings && \
+    apt-get update && apt-get install -y --no-install-recommends \
     wget curl gnupg2 software-properties-common git procps \
-    xvfb fluxbox x11vnc autocutsel \
-    cabextract unzip dos2unix xdotool \
-    && mkdir -pm755 /etc/apt/keyrings \
-    && wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key \
-    && wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/debian/dists/bookworm/winehq-bookworm.sources \
-    && apt-get update \
-    && apt-get install -y --install-recommends winehq-stable \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    tigervnc-standalone-server fluxbox autocutsel \
+    cabextract unzip dos2unix xdotool && \
+    wget -O /etc/apt/keyrings/winehq.key https://dl.winehq.org/wine-builds/winehq.key && \
+    curl -fsSL https://dl.winehq.org/wine-builds/debian/dists/bookworm/winehq-bookworm.sources -o /etc/apt/sources.list.d/winehq.sources && \
+    apt-get update && \
+    apt-get install -y --install-recommends winehq-stable && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# 2. Pull the absolute latest noVNC and websockify directly from source
-RUN git clone https://github.com/novnc/noVNC.git /opt/novnc \
-    && git clone https://github.com/novnc/websockify.git /opt/novnc/utils/websockify
+# 3 & 4. Clone noVNC, create symlink, and install websockify via pip
+RUN git clone https://github.com/novnc/noVNC.git /opt/novnc && \
+    ln -s /opt/novnc/vnc.html /opt/novnc/index.html
 
-RUN pip install --no-cache-dir mt5linux rpyc
+RUN pip install --no-cache-dir mt5linux rpyc websockify
 RUN wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe -O /root/mt5setup.exe
 
 # =========================================================
@@ -634,35 +635,53 @@ void PrintPerformance() {
 EOF
 
 # ============================================
-# 3. INSTALLATION & ENTRYPOINT
+# 5-9. INSTALLATION & ENTRYPOINT REWRITE
 # ============================================
 RUN cat > /entrypoint.sh << 'EOF'
 #!/bin/bash
 set -e
 rm -rf /tmp/.X*
-Xvfb :1 -screen 0 1280x1024x24 -ac &
+
+# 8. Skip visual bugs and drop winemenubuilder to stop clipboard threads hanging
+export WINEDLLOVERRIDES="winemenubuilder.exe=d"
+export XLIB_SKIP_ARGB_VISUALS=1
+
+# 9. Start TigerVNC which provides significantly better clipboard syncing
+Xvnc :1 -geometry 1280x1024 -depth 24 -SecurityTypes None &
 sleep 2
 
-# 3. Start Window Manager and Clipboard daemon to synchronize X11 buffer
 fluxbox &
-autocutsel -fork
 
-x11vnc -display :1 -forever -shared -nopw -rfbport 5900 &
+# 2. Run autocutsel for both buffer streams
+autocutsel -selection PRIMARY -fork
+autocutsel -selection CLIPBOARD -fork
 
-# 4. Use the manually cloned noVNC repository
+# 4. Use the websockify proxy using TigerVNC's exposed port
 /opt/novnc/utils/novnc_proxy --vnc localhost:5900 --listen 8080 &
 
+# 5. Initialize wine and wait correctly
 wineboot --init
-sleep 5
+wineserver -w
+
+# 6. Install MT5 without arbitrary sleep delays
 MT5_EXE="/root/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe"
-[ ! -f "$MT5_EXE" ] && wine /root/mt5setup.exe /auto && sleep 90
+if [ ! -f "$MT5_EXE" ]; then
+    wine /root/mt5setup.exe /auto
+    wineserver -w
+fi
+
 wine "$MT5_EXE" &
-sleep 30
+
+# 7. Wait deterministically for MetaEditor
+until [ -f "/root/.wine/drive_c/Program Files/MetaTrader 5/metaeditor64.exe" ]; do 
+    sleep 2
+done
 
 DATA_DIR=$(find /root/.wine -type d -path "*MetaQuotes/Terminal/*/MQL5" | head -n 1)
 [ -z "$DATA_DIR" ] && DATA_DIR="/root/.wine/drive_c/Program Files/MetaTrader 5/MQL5"
 mkdir -p "$DATA_DIR/Experts"
 cp /root/VALETAX_TICK_BOT_V16.mq5 "$DATA_DIR/Experts/VALETAX_TICK_BOT_V16.mq5"
+
 wine "/root/.wine/drive_c/Program Files/MetaTrader 5/metaeditor64.exe" /compile:"$DATA_DIR/Experts/VALETAX_TICK_BOT_V16.mq5" /log:"/root/compile.log"
 
 python3 -m mt5linux --host 0.0.0.0 --port 8001 &
