@@ -1,4 +1,3 @@
-
 FROM python:3.11-slim-bookworm
 
 USER root
@@ -8,10 +7,21 @@ ENV WINEPREFIX=/root/.wine
 ENV WINEARCH=win64
 ENV WINEDEBUG=-all
 
+# 1. Install prerequisites, add WineHQ keys, and install X11 + clipboard manager
 RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
-    wine wine64 wine32:i386 winbind xvfb fluxbox x11vnc novnc websockify \
-    wget curl procps cabextract unzip dos2unix xdotool \
+    wget curl gnupg2 software-properties-common git procps \
+    xvfb fluxbox x11vnc autocutsel \
+    cabextract unzip dos2unix xdotool \
+    && mkdir -pm755 /etc/apt/keyrings \
+    && wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key \
+    && wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/debian/dists/bookworm/winehq-bookworm.sources \
+    && apt-get update \
+    && apt-get install -y --install-recommends winehq-stable \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 2. Pull the absolute latest noVNC and websockify directly from source
+RUN git clone https://github.com/novnc/noVNC.git /opt/novnc \
+    && git clone https://github.com/novnc/websockify.git /opt/novnc/utils/websockify
 
 RUN pip install --no-cache-dir mt5linux rpyc
 RUN wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe -O /root/mt5setup.exe
@@ -621,7 +631,6 @@ void PrintPerformance() {
    Print("═══════════════════════════════════════════════════════════");
 }
 //+------------------------------------------------------------------+
-
 EOF
 
 # ============================================
@@ -633,9 +642,16 @@ set -e
 rm -rf /tmp/.X*
 Xvfb :1 -screen 0 1280x1024x24 -ac &
 sleep 2
+
+# 3. Start Window Manager and Clipboard daemon to synchronize X11 buffer
 fluxbox &
+autocutsel -fork
+
 x11vnc -display :1 -forever -shared -nopw -rfbport 5900 &
-websockify --web=/usr/share/novnc 8080 0.0.0.0:5900 &
+
+# 4. Use the manually cloned noVNC repository
+/opt/novnc/utils/novnc_proxy --vnc localhost:5900 --listen 8080 &
+
 wineboot --init
 sleep 5
 MT5_EXE="/root/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe"
