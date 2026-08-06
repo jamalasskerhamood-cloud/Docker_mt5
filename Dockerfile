@@ -1,3 +1,4 @@
+
 FROM python:3.11-slim-bookworm
 
 USER root
@@ -7,24 +8,12 @@ ENV WINEPREFIX=/root/.wine
 ENV WINEARCH=win64
 ENV WINEDEBUG=-all
 
-# 1. Correct WineHQ Installation & Replace x11vnc/Xvfb with TigerVNC
-RUN dpkg --add-architecture i386 && \
-    mkdir -pm755 /etc/apt/keyrings && \
-    apt-get update && apt-get install -y --no-install-recommends \
-    wget curl gnupg2 software-properties-common git procps \
-    tigervnc-standalone-server fluxbox autocutsel \
-    cabextract unzip dos2unix xdotool && \
-    wget -O /etc/apt/keyrings/winehq.key https://dl.winehq.org/wine-builds/winehq.key && \
-    curl -fsSL https://dl.winehq.org/wine-builds/debian/dists/bookworm/winehq-bookworm.sources -o /etc/apt/sources.list.d/winehq.sources && \
-    apt-get update && \
-    apt-get install -y --install-recommends winehq-stable && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
+    wine wine64 wine32:i386 winbind xvfb fluxbox x11vnc novnc websockify \
+    wget curl procps cabextract unzip dos2unix xdotool \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# 3 & 4. Clone noVNC, create symlink, and install websockify via pip
-RUN git clone https://github.com/novnc/noVNC.git /opt/novnc && \
-    ln -s /opt/novnc/vnc.html /opt/novnc/index.html
-
-RUN pip install --no-cache-dir mt5linux rpyc websockify
+RUN pip install --no-cache-dir mt5linux rpyc
 RUN wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe -O /root/mt5setup.exe
 
 # =========================================================
@@ -37,7 +26,7 @@ RUN cat > /root/VALETAX_TICK_BOT_V16.mq5 << 'EOF'
 //|                                                      Flow Trader  |
 //+------------------------------------------------------------------+
 #property copyright "LiquiditySweep EA"
-#property version   "1.00"
+#property version   "1.01"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -57,12 +46,12 @@ input double   MaxDailyLossPct  = 10.0;       // Max daily loss (%)
 input double   MaxDrawdownPct   = 20.0;       // Max account drawdown (%)
 input int      MaxPositions     = 2;          // Maximum concurrent positions
 
-//--- Entry Settings ---
-input int      LookbackCandles  = 7;          // Candles to scan for liquidity (5-10)
-input int      MinVolumeRatio   = 150;        // Min volume ratio to average (%)
-input int      MinBodyPercent   = 60;         // Min body % of candle range
-input double   MinATR           = 200.0;      // Minimum ATR in points
-input int      CooldownBars     = 3;          // Cooldown after exit (bars)
+//--- Entry Settings (Relaxed for Active Trading) ---
+input int      LookbackCandles  = 5;          // Candles to scan for liquidity (5-10)
+input int      MinVolumeRatio   = 100;        // Min volume ratio to average (%) [Was 150]
+input int      MinBodyPercent   = 20;         // Min body % of candle range [Was 60]
+input double   MinATR           = 50.0;       // Minimum ATR in points [Was 200]
+input int      CooldownBars     = 1;          // Cooldown after exit (bars) [Was 3]
 
 //--- Exit Settings ---
 input double   ATRMultiplierSL  = 1.5;        // ATR multiplier for SL
@@ -123,14 +112,12 @@ string Top20CryptoSymbols[20] = {
 //+------------------------------------------------------------------+
 int OnInit() {
    Print("═══════════════════════════════════════════════════════════");
-   Print("  LIQUIDITY SWEEP + ORDER FLOW EA v1.00");
-   Print("  BTCUSD.vx Microstructure Strategy");
+   Print("  LIQUIDITY SWEEP + ORDER FLOW EA v1.01 (Relaxed Rules)");
    Print("═══════════════════════════════════════════════════════════");
    
    //--- Initialize Objects ---
    obj_Trade.SetExpertMagicNumber(MagicNumber);
    obj_Trade.SetDeviationInPoints(SlippagePts);
-   obj_Trade.SetTypeFilling(ORDER_FILLING_FOK);
    
    //--- Get Symbol Info ---
    obj_Symbol.Name(_Symbol);
@@ -156,7 +143,7 @@ void DetectBrokerSettings() {
    //--- Minimum Stop Level ---
    minStopLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
    if (minStopLevel == 0) {
-      minStopLevel = 1000;  // Safe default for BTC
+      minStopLevel = 100;  
       Print("[WARNING] Broker stop level not reported, using default: ", minStopLevel);
    }
    
@@ -169,20 +156,19 @@ void DetectBrokerSettings() {
    if (lotMin == 0) lotMin = 0.01;
    
    //--- Fill Mode ---
-   fillMode = SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE);
-   if (fillMode == 0) {
-      fillMode = ORDER_FILLING_FOK;
-      Print("[WARNING] Fill mode not detected, using FOK");
+   uint filling = (uint)SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE);
+   if((filling & SYMBOL_FILLING_FOK) != 0) {
+      obj_Trade.SetTypeFilling(ORDER_FILLING_FOK);
+   } else if((filling & SYMBOL_FILLING_IOC) != 0) {
+      obj_Trade.SetTypeFilling(ORDER_FILLING_IOC);
+   } else {
+      obj_Trade.SetTypeFilling(ORDER_FILLING_RETURN);
    }
-   
-   //--- Set Trade Fill Mode ---
-   obj_Trade.SetTypeFilling((ENUM_ORDER_TYPE_FILLING)fillMode);
    
    Print("[INFO] Broker Settings Detected:");
    Print("  Min Stop Level: ", minStopLevel, " points");
    Print("  Lot Step: ", lotStep);
    Print("  Lot Min: ", lotMin);
-   Print("  Fill Mode: ", fillMode);
 }
 
 //+------------------------------------------------------------------+
@@ -221,35 +207,22 @@ void OnDeinit(const int reason) {
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick() {
-   //--- Update Symbol Info ---
    obj_Symbol.Refresh();
    
-   //--- Check for New Bar ---
    if (!IsNewBar()) return;
    
-   //--- Update Tracking ---
    UpdateTracking();
-   
-   //--- Risk Checks ---
    if (!PassesRiskChecks()) return;
-   
-   //--- Update Indicators ---
    UpdateIndicators();
    
-   //--- Check Existing Positions ---
    int posCount = CountPositions();
-   
    if (posCount > 0) {
       ManagePositions();
       return;
    }
    
-   //--- Cooldown Check ---
-   if (barsSinceLastTrade < CooldownBars) {
-      return;
-   }
+   if (barsSinceLastTrade < CooldownBars) return;
    
-   //--- Look for Entry ---
    if (posCount < MaxPositions) {
       CheckForEntry();
    }
@@ -259,7 +232,7 @@ void OnTick() {
 //| Check if New Bar                                                 |
 //+------------------------------------------------------------------+
 bool IsNewBar() {
-   datetime currentBarTime = iTime(_Symbol, PERIOD_M1, 0);
+   datetime currentBarTime = iTime(_Symbol, _Period, 0); // Dynamic chart timeframe
    if (currentBarTime == lastBarTime) return false;
    lastBarTime = currentBarTime;
    barsSinceLastTrade++;
@@ -273,15 +246,11 @@ void UpdateTracking() {
    double currentBalance = obj_Account.Balance();
    double currentEquity = obj_Account.Equity();
    
-   //--- Update Peak Balance ---
    if (currentEquity > peakBalance) {
       peakBalance = currentEquity;
    }
    
-   //--- Calculate Daily Loss ---
    dailyLoss = dailyStartBalance - currentEquity;
-   
-   //--- Calculate Current Drawdown ---
    currentDrawdown = ((peakBalance - currentEquity) / peakBalance) * 100;
 }
 
@@ -289,20 +258,12 @@ void UpdateTracking() {
 //| Pass Risk Checks                                                 |
 //+------------------------------------------------------------------+
 bool PassesRiskChecks() {
-   //--- Daily Loss Check ---
-   if ((dailyLoss / dailyStartBalance) * 100 >= MaxDailyLossPct) {
-      return false;
-   }
+   if ((dailyLoss / dailyStartBalance) * 100 >= MaxDailyLossPct) return false;
+   if (currentDrawdown >= MaxDrawdownPct) return false;
    
-   //--- Drawdown Check ---
-   if (currentDrawdown >= MaxDrawdownPct) {
-      return false;
-   }
-   
-   //--- Spread Check ---
    int spread = GetSpreadPoints();
-   if (spread > 5000) {
-      Print("Spread too high: ", spread, " points - skipping");
+   if (spread > 10000) {
+      Print("[SKIP] Spread too high: ", spread, " points");
       return false;
    }
    
@@ -313,10 +274,7 @@ bool PassesRiskChecks() {
 //| Update Indicators                                                |
 //+------------------------------------------------------------------+
 void UpdateIndicators() {
-   //--- ATR ---
    currentATR = CalculateATR(14);
-   
-   //--- Average Volume ---
    avgVolume = CalculateAverageVolume(20);
 }
 
@@ -325,10 +283,16 @@ void UpdateIndicators() {
 //+------------------------------------------------------------------+
 double CalculateATR(int period) {
    double atrArray[];
-   int atrHandle = iATR(_Symbol, PERIOD_M1, period);
-   CopyBuffer(atrHandle, 0, 0, 1, atrArray);
+   int atrHandle = iATR(_Symbol, _Period, period);
+   
+   if (CopyBuffer(atrHandle, 0, 0, 1, atrArray) <= 0) {
+      IndicatorRelease(atrHandle);
+      return 100;
+   }
+   
+   double atrPoints = atrArray[0] / _Point;
    IndicatorRelease(atrHandle);
-   return (atrArray[0] > 0) ? atrArray[0] : 500;
+   return (atrPoints > 0) ? atrPoints : 100;
 }
 
 //+------------------------------------------------------------------+
@@ -337,7 +301,8 @@ double CalculateATR(int period) {
 double CalculateAverageVolume(int period) {
    long volumeArray[];
    double total = 0;
-   CopyTickVolume(_Symbol, PERIOD_M1, 1, period, volumeArray);
+   if (CopyTickVolume(_Symbol, _Period, 1, period, volumeArray) <= 0) return 1;
+   
    for (int i = 0; i < period; i++) {
       total += volumeArray[i];
    }
@@ -372,16 +337,14 @@ int GetSpreadPoints() {
 //| Check For Entry                                                  |
 //+------------------------------------------------------------------+
 void CheckForEntry() {
-   //--- Volatility Check ---
    if (currentATR < MinATR) {
+      Print("[DEBUG] Skipping: ATR ", currentATR, " < MinATR ", MinATR);
       return;
    }
    
-   //--- Look for Liquidity Sweep ---
    int direction = DetectLiquiditySweep();
    if (direction == 0) return;
    
-   //--- Enter Trade ---
    EnterTrade(direction);
 }
 
@@ -391,7 +354,6 @@ void CheckForEntry() {
 int DetectLiquiditySweep() {
    int direction = 0;
    
-   //--- Get High/Low of Last N Candles ---
    double highBuffer[];
    double lowBuffer[];
    double closeBuffer[];
@@ -405,51 +367,48 @@ int DetectLiquiditySweep() {
    ArraySetAsSeries(openBuffer, true);
    ArraySetAsSeries(volumeBuffer, true);
    
-   // Shift lookup +2 to analyze index 1 (completed bar) instead of index 0 (empty new bar)
-   CopyHigh(_Symbol, PERIOD_M1, 0, lookback + 2, highBuffer);
-   CopyLow(_Symbol, PERIOD_M1, 0, lookback + 2, lowBuffer);
-   CopyClose(_Symbol, PERIOD_M1, 0, lookback + 2, closeBuffer);
-   CopyOpen(_Symbol, PERIOD_M1, 0, lookback + 2, openBuffer);
-   CopyTickVolume(_Symbol, PERIOD_M1, 0, lookback + 2, volumeBuffer);
+   if (CopyHigh(_Symbol, _Period, 0, lookback + 2, highBuffer) < lookback + 2) return 0;
+   if (CopyLow(_Symbol, _Period, 0, lookback + 2, lowBuffer) < lookback + 2) return 0;
+   if (CopyClose(_Symbol, _Period, 0, lookback + 2, closeBuffer) < lookback + 2) return 0;
+   if (CopyOpen(_Symbol, _Period, 0, lookback + 2, openBuffer) < lookback + 2) return 0;
+   if (CopyTickVolume(_Symbol, _Period, 0, lookback + 2, volumeBuffer) < lookback + 2) return 0;
    
-   //--- Find Swing High/Low from older bars (starting from index 2) ---
    double swingHigh = highBuffer[ArrayMaximum(highBuffer, 2, lookback)];
    double swingLow = lowBuffer[ArrayMinimum(lowBuffer, 2, lookback)];
    
-   //--- Current Signal Candle (The one that just fully closed - Index 1) ---
    double currentHigh = highBuffer[1];
    double currentLow = lowBuffer[1];
    double currentClose = closeBuffer[1];
    double currentOpen = openBuffer[1];
    long currentVolume = volumeBuffer[1];
    
-   //--- Check Liquidity Sweep UP ---
-   if (currentHigh > swingHigh) {
-      //--- Check Rejection (close back below swing high) ---
-      if (currentClose < swingHigh) {
-         //--- Check Body % ---
-         double bodyPercent = GetBodyPercent(currentOpen, currentClose, currentHigh, currentLow);
-         if (bodyPercent >= MinBodyPercent) {
-            //--- Check Volume Expansion ---
-            if ((double)currentVolume > (avgVolume * MinVolumeRatio / 100)) {
-               direction = 1;  // SELL (rejection after liquidity sweep up)
-            }
+   //--- Sweep UP ---
+   if (currentHigh > swingHigh && currentClose < swingHigh) {
+      double bodyPercent = GetBodyPercent(currentOpen, currentClose, currentHigh, currentLow);
+      if (bodyPercent >= MinBodyPercent) {
+         double reqVolume = avgVolume * MinVolumeRatio / 100.0;
+         if ((double)currentVolume >= reqVolume) {
+            direction = 1;  // SELL
+         } else {
+            Print("[DEBUG] Sweep UP: Vol ", currentVolume, " < Req ", reqVolume);
          }
+      } else {
+         Print("[DEBUG] Sweep UP: Body ", DoubleToString(bodyPercent, 1), "% < Min ", MinBodyPercent, "%");
       }
    }
    
-   //--- Check Liquidity Sweep DOWN ---
-   if (currentLow < swingLow) {
-      //--- Check Rejection (close back above swing low) ---
-      if (currentClose > swingLow) {
-         //--- Check Body % ---
-         double bodyPercent = GetBodyPercent(currentOpen, currentClose, currentHigh, currentLow);
-         if (bodyPercent >= MinBodyPercent) {
-            //--- Check Volume Expansion ---
-            if ((double)currentVolume > (avgVolume * MinVolumeRatio / 100)) {
-               direction = -1;  // BUY (rejection after liquidity sweep down)
-            }
+   //--- Sweep DOWN ---
+   if (currentLow < swingLow && currentClose > swingLow) {
+      double bodyPercent = GetBodyPercent(currentOpen, currentClose, currentHigh, currentLow);
+      if (bodyPercent >= MinBodyPercent) {
+         double reqVolume = avgVolume * MinVolumeRatio / 100.0;
+         if ((double)currentVolume >= reqVolume) {
+            direction = -1;  // BUY
+         } else {
+            Print("[DEBUG] Sweep DOWN: Vol ", currentVolume, " < Req ", reqVolume);
          }
+      } else {
+         Print("[DEBUG] Sweep DOWN: Body ", DoubleToString(bodyPercent, 1), "% < Min ", MinBodyPercent, "%");
       }
    }
    
@@ -474,14 +433,12 @@ double CalculateLotSize() {
    double riskAmount = balance * (RiskPercent / 100);
    double stopLossPoints = currentATR * ATRMultiplierSL;
    
-   // Fix: Protect against division by zero if broker tick returns invalid values
    double tickValue = obj_Symbol.TickValue();
    if (tickValue <= 0) tickValue = 1.0;
    if (stopLossPoints <= 0) stopLossPoints = 1.0;
    
    double lotSize = riskAmount / (stopLossPoints * tickValue);
    
-   //--- Normalize Lot Size ---
    lotSize = MathRound(lotSize / lotStep) * lotStep;
    if (lotSize < lotMin) lotSize = lotMin;
    if (lotSize > SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX)) {
@@ -499,25 +456,22 @@ void EnterTrade(int direction) {
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double lotSize = CalculateLotSize();
    
-   //--- Calculate SL/TP ---
    double slPoints = currentATR * ATRMultiplierSL;
    double tpPoints = currentATR * ATRMultiplierTP;
    
-   //--- Ensure Minimum Stop Distance ---
    if (slPoints < minStopLevel) slPoints = minStopLevel;
    if (tpPoints < minStopLevel * 2) tpPoints = minStopLevel * 2;
    
-   //--- Place Order with Retry ---
    bool success = false;
    string comment = "";
    
    for (int retry = 0; retry < OrderRetryCount; retry++) {
-      if (direction == 1) {  // SELL (rejection after sweep up)
+      if (direction == 1) {  // SELL
          double sl = bid + slPoints * _Point;
          double tp = bid - tpPoints * _Point;
          comment = "Sweep_Up_Rej";
          success = obj_Trade.Sell(lotSize, _Symbol, bid, sl, tp, comment);
-      } else if (direction == -1) {  // BUY (rejection after sweep down)
+      } else if (direction == -1) {  // BUY
          double sl = ask - slPoints * _Point;
          double tp = ask + tpPoints * _Point;
          comment = "Sweep_Down_Rej";
@@ -526,22 +480,18 @@ void EnterTrade(int direction) {
       
       if (success) break;
       
-      //--- Retry with adjusted settings ---
       Sleep(100);
       obj_Symbol.Refresh();
       ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      
-      if (retry == OrderRetryCount - 1) {
-         Print("[ERROR] Failed to place order after ", OrderRetryCount, " attempts");
-         return;
-      }
    }
    
    if (success) {
       totalTradesToday++;
       barsSinceLastTrade = 0;
       Print("[✓] ORDER EXECUTED: ", comment, " | Lot: ", lotSize, " | SL: ", slPoints, " | TP: ", tpPoints);
+   } else {
+      Print("[ERROR] Order execution failed. Code: ", GetLastError());
    }
 }
 
@@ -559,23 +509,20 @@ void ManagePositions() {
                            ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
                            : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       
-      //--- Calculate R (Risk Units) ---
       double slPoints = currentATR * ATRMultiplierSL;
       double rUnits = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
                      ? (currentPrice - openPrice) / (slPoints * _Point)
                      : (openPrice - currentPrice) / (slPoints * _Point);
       
-      //--- Check Time Exit ---
       datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
       datetime currentTime = TimeCurrent();
-      int barsHeld = (int)((currentTime - openTime) / PeriodSeconds(PERIOD_M1));
+      int barsHeld = (int)((currentTime - openTime) / PeriodSeconds(_Period));
       
       if (barsHeld >= MaxHoldingBars) {
          ClosePosition(ticket, "Time Exit");
          continue;
       }
       
-      //--- Trailing Stop ---
       if (rUnits >= TrailingStart) {
          double trailStep = TrailingStep * slPoints * _Point;
          double newSL = 0;
@@ -632,56 +579,33 @@ void PrintPerformance() {
    Print("═══════════════════════════════════════════════════════════");
 }
 //+------------------------------------------------------------------+
+
+
 EOF
 
 # ============================================
-# 5-9. INSTALLATION & ENTRYPOINT REWRITE
+# 3. INSTALLATION & ENTRYPOINT
 # ============================================
 RUN cat > /entrypoint.sh << 'EOF'
 #!/bin/bash
 set -e
 rm -rf /tmp/.X*
-
-# 8. Skip visual bugs and drop winemenubuilder to stop clipboard threads hanging
-export WINEDLLOVERRIDES="winemenubuilder.exe=d"
-export XLIB_SKIP_ARGB_VISUALS=1
-
-# 9. Start TigerVNC which provides significantly better clipboard syncing
-Xvnc :1 -geometry 1280x1024 -depth 24 -SecurityTypes None &
+Xvfb :1 -screen 0 1280x1024x24 -ac &
 sleep 2
-
 fluxbox &
-
-# 2. Run autocutsel for both buffer streams
-autocutsel -selection PRIMARY -fork
-autocutsel -selection CLIPBOARD -fork
-
-# 4. Use the websockify proxy using TigerVNC's exposed port
-/opt/novnc/utils/novnc_proxy --vnc localhost:5900 --listen 8080 &
-
-# 5. Initialize wine and wait correctly
+x11vnc -display :1 -forever -shared -nopw -rfbport 5900 &
+websockify --web=/usr/share/novnc 8080 0.0.0.0:5900 &
 wineboot --init
-wineserver -w
-
-# 6. Install MT5 without arbitrary sleep delays
+sleep 5
 MT5_EXE="/root/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe"
-if [ ! -f "$MT5_EXE" ]; then
-    wine /root/mt5setup.exe /auto
-    wineserver -w
-fi
-
+[ ! -f "$MT5_EXE" ] && wine /root/mt5setup.exe /auto && sleep 90
 wine "$MT5_EXE" &
-
-# 7. Wait deterministically for MetaEditor
-until [ -f "/root/.wine/drive_c/Program Files/MetaTrader 5/metaeditor64.exe" ]; do 
-    sleep 2
-done
+sleep 30
 
 DATA_DIR=$(find /root/.wine -type d -path "*MetaQuotes/Terminal/*/MQL5" | head -n 1)
 [ -z "$DATA_DIR" ] && DATA_DIR="/root/.wine/drive_c/Program Files/MetaTrader 5/MQL5"
 mkdir -p "$DATA_DIR/Experts"
 cp /root/VALETAX_TICK_BOT_V16.mq5 "$DATA_DIR/Experts/VALETAX_TICK_BOT_V16.mq5"
-
 wine "/root/.wine/drive_c/Program Files/MetaTrader 5/metaeditor64.exe" /compile:"$DATA_DIR/Experts/VALETAX_TICK_BOT_V16.mq5" /log:"/root/compile.log"
 
 python3 -m mt5linux --host 0.0.0.0 --port 8001 &
