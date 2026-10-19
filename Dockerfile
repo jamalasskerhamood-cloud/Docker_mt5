@@ -7,17 +7,18 @@ ENV WINEPREFIX=/root/.wine
 ENV WINEARCH=win64
 ENV WINEDEBUG=-all
 
-# Install dependencies including cabextract and curl
+# Add i386 architecture and install baseline dependencies
 RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
-    wine wine64 wine32:i386 winbind xvfb fluxbox x11vnc novnc websockify \
     wget curl procps cabextract unzip dos2unix xdotool gpg software-properties-common \
+    xvfb fluxbox x11vnc novnc websockify \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Add WineHQ repository to pull a clean stable build that avoids the debugger panic
+# Add WineHQ repository and install a stable Wine 10 version package to avoid the debugger trap
 RUN mkdir -p /etc/apt/keyrings \
     && wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key \
     && wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/debian/dists/bookworm/winehq-bookworm.sources \
-    && apt-get update && apt-get install --install-recommends -y winehq-stable || true
+    && apt-get update \
+    && apt-get install -y --install-recommends wine-stable-amd64=10.0* wine-stable-i386=10.0* wine-stable=10.0* || apt-get install -y winehq-stable || true
 
 RUN pip install --no-cache-dir mt5linux rpyc
 
@@ -50,7 +51,7 @@ if [ ! -f "$MT5_EXE" ]; then
     echo "Downloading MetaTrader 5 setup..."
     wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe -O /root/mt5setup.exe
     
-    # Disable wine crash dialogs and run installer silently
+    # Disable wine crash dialogs
     wine reg add "HKEY_CURRENT_USER\Software\Wine\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
     
     wine /root/mt5setup.exe /auto || true
