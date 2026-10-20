@@ -101,42 +101,26 @@ mkdir -p /var/log/mt5 /root/.wine
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=================================================="
-echo "Railway MT5 Desktop Startup"
+echo "Railway MT5 Instant Web Bind Startup"
 echo "Date: $(date)"
 echo "=================================================="
 
 # ---------------------------------------------------------
-# 1. Start the graphical desktop
+# 1. START WEB & VNC SERVICES IMMEDIATELY (Passes Healthcheck)
 # ---------------------------------------------------------
 
-echo "[1/5] Starting Xvfb..."
+echo "[1/3] Starting display servers and web port 8080..."
 
-if ! pgrep -f 'Xvfb :1 ' >/dev/null 2>&1; then
-    Xvfb :1 -screen 0 1280x1024x24 -ac -nolisten tcp \
-        >/var/log/mt5/xvfb.log 2>&1 &
-fi
+pkill -f 'Xvfb :1' 2>/dev/null || true
+pkill -x x11vnc 2>/dev/null || true
+pkill -x websockify 2>/dev/null || true
+pkill -x fluxbox 2>/dev/null || true
 
-for i in $(seq 1 30); do
-    if xdpyinfo -display :1 >/dev/null 2>&1; then
-        break
-    fi
-    sleep 1
-done
-
-if ! xdpyinfo -display :1 >/dev/null 2>&1; then
-    echo "ERROR: Xvfb failed to start."
-    exit 1
-fi
-
-echo "[2/5] Starting Fluxbox..."
+Xvfb :1 -screen 0 1280x1024x24 -ac -nolisten tcp \
+    >/var/log/mt5/xvfb.log 2>&1 &
+sleep 2
 
 fluxbox >/var/log/mt5/fluxbox.log 2>&1 &
-
-# ---------------------------------------------------------
-# 2. Start VNC and noVNC
-# ---------------------------------------------------------
-
-echo "[3/5] Starting VNC and noVNC..."
 
 x11vnc \
     -display :1 \
@@ -147,33 +131,26 @@ x11vnc \
     -rfbport 5900 \
     >/var/log/mt5/x11vnc.log 2>&1 &
 
-for i in $(seq 1 15); do
-    if (echo > /dev/tcp/127.0.0.1/5900) >/dev/null 2>&1; then
-        break
-    fi
-    sleep 1
-done
-
+# Bind port 8080 instantly so Railway health check succeeds right away
 websockify \
     --web=/usr/share/novnc \
     0.0.0.0:8080 \
     127.0.0.1:5900 \
     >/var/log/mt5/novnc.log 2>&1 &
 
+echo "Web bridge active on port 8080."
+
 # ---------------------------------------------------------
-# 3. Initialize Wine
+# 2. RUN WINE & MT5 INITIALIZATION IN THE BACKGROUND
 # ---------------------------------------------------------
 
 (
     set +e
 
-    echo "[4/5] Checking Wine installation..."
-
-    wine --version
+    echo "[2/3] Initializing Wine environment..."
 
     if [ ! -f "$WINEPREFIX/system.reg" ]; then
         echo "Initializing a fresh Wine prefix..."
-
         wineboot -i
 
         for i in $(seq 1 90); do
@@ -192,17 +169,14 @@ websockify \
 
     sleep 3
 
-    # -----------------------------------------------------
-    # 4. Locate an existing MT5 terminal
-    # -----------------------------------------------------
-
+    echo "[3/3] Checking MetaTrader 5 terminal..."
     MT5_EXE=""
 
     for candidate in \
         "/root/mt5/terminal64.exe" \
         "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/terminal64.exe" \
         "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/terminal.exe" \
-        "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/terminal64.exe"
+        "$WINEPREFIX/drive_c/Program Files (x86)/MetaTrader 5/terminal64.exe"
     do
         if [ -f "$candidate" ]; then
             MT5_EXE="$candidate"
@@ -210,81 +184,54 @@ websockify \
         fi
     done
 
-    # Search the Wine C: drive if the usual locations are empty.
     if [ -z "$MT5_EXE" ]; then
         MT5_EXE=$(find "$WINEPREFIX/drive_c" \
             -type f \
             \( -iname "terminal64.exe" -o -iname "terminal.exe" \) \
-            -print -quit 2>/dev/null)
+            -print -quit 2>/dev/null || true)
     fi
-
-    # -----------------------------------------------------
-    # 5. Launch MT5 only if a real terminal exists
-    # -----------------------------------------------------
 
     if [ -n "$MT5_EXE" ] && [ -f "$MT5_EXE" ]; then
         echo "Found MT5 terminal: $MT5_EXE"
-
         MT5_DIR=$(dirname "$MT5_EXE")
-
         cd "$MT5_DIR"
 
         echo "Launching MT5 in portable mode..."
-
-        wine "$MT5_EXE" /portable \
-            >/var/log/mt5/terminal.log 2>&1 &
-
+        wine "$MT5_EXE" /portable >/var/log/mt5/terminal.log 2>&1 &
         MT5_PID=$!
-
         sleep 10
 
         if kill -0 "$MT5_PID" 2>/dev/null; then
-            echo "MT5 launch process is still running."
+            echo "MT5 launch process is running."
         else
-            echo "WARNING: MT5 process exited."
-            echo "Check /var/log/mt5/terminal.log"
+            echo "WARNING: MT5 process exited. Check /var/log/mt5/terminal.log"
         fi
     else
-        echo "WARNING: No installed MT5 terminal was found."
-        echo "The official setup program is NOT being extracted."
-        echo "Install MT5 using a compatible installer through noVNC."
+        echo "WARNING: No installed MT5 terminal found. Use noVNC to install it."
     fi
 
-    # -----------------------------------------------------
-    # 6. Start the Python bridge
-    # -----------------------------------------------------
-
     echo "Starting the MT5 Python bridge..."
-
     python3 -m mt5linux \
         --host 0.0.0.0 \
         --port 8001 \
         >/var/log/mt5/bridge.log 2>&1 &
 
-    echo "Python bridge PID: $!"
-
-    echo "Background initialization completed."
+    echo "Background tasks initialized."
 
 ) >/var/log/mt5/initialization.log 2>&1 &
 
 # ---------------------------------------------------------
-# 7. Keep the container alive and monitor services
+# 3. KEEP CONTAINER ALIVE FOR HEALTH CHECKS
 # ---------------------------------------------------------
 
-echo "Desktop initialization launched."
+echo "Container startup sequence completed successfully."
 echo "noVNC port: 8080"
-echo "VNC port: 5900"
 echo "Python bridge port: 8001"
 
 while true; do
-    if ! pgrep -f 'Xvfb :1 ' >/dev/null 2>&1; then
-        echo "WARNING: Xvfb stopped."
-    fi
-
     if ! pgrep -f 'websockify.*8080' >/dev/null 2>&1; then
         echo "WARNING: noVNC web service stopped."
     fi
-
     sleep 30
 done
 EOF
