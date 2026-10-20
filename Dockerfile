@@ -30,6 +30,7 @@ RUN dpkg --add-architecture i386 \
         websockify \
         net-tools \
         psmisc \
+        xterm \
         fonts-liberation \
         fonts-dejavu-core \
         libgl1 \
@@ -100,9 +101,8 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway MT5 Portable Auto-Deploy"
+echo "Railway MT5 Desktop Terminal Ready"
 echo "Date: $(date)"
-echo "Wine: $(wine --version 2>/dev/null || echo unavailable)"
 echo "=================================================="
 
 # =========================================================
@@ -137,10 +137,8 @@ websockify \
     127.0.0.1:5900 \
     >"$LOG_DIR/novnc.log" 2>&1 &
 
-echo "Web bridge active on port 8080."
-
 # =========================================================
-# 2. WINE INITIALIZATION & AUTOMATED MT5 EXTRACTION
+# 2. WINE INITIALIZATION & ENVIRONMENT SETUP
 # =========================================================
 
 (
@@ -158,61 +156,47 @@ echo "Web bridge active on port 8080."
         wineboot -u >"$LOG_DIR/wineboot.log" 2>&1
     fi
 
-    if [ ! -f "$WINEPREFIX/system.reg" ]; then
-        echo "ERROR: Wine prefix initialization failed."
-        exit 1
-    fi
-
-    sleep 3
-
     # Neutralize debugger detection registries
     wine reg delete "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug" /f || true
     wine reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
 
-    # Locate or extract MetaTrader 5 terminal
     MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
     MT5_EXE="$MT5_DIR/terminal64.exe"
 
     if [ ! -f "$MT5_EXE" ]; then
-        echo "Setting up MT5 files without wizard triggers..."
-        mkdir -p "$MT5_DIR" /tmp/mt5_extract
-        cd /tmp/mt5_extract
-
+        echo "Attempting package retrieval..."
+        mkdir -p "$MT5_DIR" /tmp/mt5_dl
+        cd /tmp/mt5_dl
+        
         wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe -O mt5setup.exe || true
+        cabextract -d /tmp/extracted mt5setup.exe || true
         
-        # Extract files cleanly via cabextract to bypass setup.exe security scan
-        cabextract mt5setup.exe || true
-        
-        if [ -f "terminal64.exe" ]; then
-            cp -rf * "$MT5_DIR/" || true
-        else
-            # Fallback search inside extracted files
-            FOUND_EXTRACTED=$(find /tmp/mt5_extract -name "terminal64.exe" | head -n 1)
-            if [ -n "$FOUND_EXTRACTED" ]; then
-                cp -rf "$(dirname "$FOUND_EXTRACTED")"/* "$MT5_DIR/" || true
-            fi
+        if [ -d "/tmp/extracted" ]; then
+            cp -rf /tmp/extracted/* "$MT5_DIR/" || true
         fi
     fi
 
-    # Final verification search
+    # Broad search across drive_c for terminal executable
     if [ ! -f "$MT5_EXE" ]; then
-        MT5_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
+        FOUND_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
+        if [ -n "$FOUND_EXE" ]; then
+            MT5_EXE="$FOUND_EXE"
+        fi
     fi
 
     if [ -n "$MT5_EXE" ] && [ -f "$MT5_EXE" ]; then
-        echo "Found MT5 terminal: $MT5_EXE"
+        echo "Launching MetaTrader 5 terminal: $MT5_EXE"
         cd "$(dirname "$MT5_EXE")"
-        
-        echo "Launching MetaTrader 5 in portable mode..."
         wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 10
     else
-        echo "WARNING: Terminal executable not auto-extracted. Use noVNC to complete layout."
+        echo "NOTICE: MetaTrader binary not found automatically."
+        echo "You can open an xterm terminal via noVNC to install or drop files manually."
     fi
 
     # =========================================================
-    # 3. START PYTHON BRIDGE
-    # =========================================================
+# 3. START PYTHON BRIDGE
+# =========================================================
 
     echo "[5/5] Starting Python mt5linux bridge on port 8001..."
     python3 -m mt5linux \
@@ -220,7 +204,7 @@ echo "Web bridge active on port 8080."
         --port 8001 \
         >"$LOG_DIR/bridge.log" 2>&1 &
 
-    echo "Background tasks initialized successfully."
+    echo "Background tasks initialized."
 
 ) >"$LOG_DIR/initialization.log" 2>&1 &
 
@@ -228,7 +212,7 @@ echo "Web bridge active on port 8080."
 # 4. KEEP CONTAINER ALIVE
 # =========================================================
 
-echo "Container startup sequence completed."
+echo "Container startup sequence completed successfully."
 
 while true; do
     if ! pgrep -f 'websockify.*8080' >/dev/null 2>&1; then
