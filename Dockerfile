@@ -136,56 +136,40 @@ websockify \
 
 echo "Web interface active on port 8080."
 
-# Optional visual terminal window to monitor live logs if needed
-xterm -fa 'Monospace' -fs 10 -bg '#1e1e1e' -fg '#00ff00' -title "Railway System Terminal" -e "tail -f /var/log/mt5/startup.log" &
+# =========================================================
+# 2. AUTOMATED LIVE TERMINAL INSTALLATION & LAUNCH
+# =========================================================
+
+# This xterm window will automatically run the setup commands live on your screen
+xterm -fa 'Monospace' -fs 10 -bg '#1e1e1e' -fg '#00ff00' -title "MT5 Automated Setup" -e "
+echo 'Initializing Wine Environment...'
+wineboot -i
+wine reg add 'HKCU\\Software\\Wine\\WineDbg' /v 'ShowCrashDialog' /t REG_DWORD /d 0 /f || true
+
+echo 'Downloading and extracting MetaTrader 5...'
+cd /root
+wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe
+cabextract mt5setup.exe
+mkdir -p '/root/.wine/drive_c/Program Files/MetaTrader 5'
+cp -rf * '/root/.wine/drive_c/Program Files/MetaTrader 5/'
+
+echo 'Launching MetaTrader 5 in portable mode...'
+wine '/root/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe' /portable
+bash
+" &
 
 # =========================================================
-# 2. BACKGROUND WINE INITIALIZATION & AUTOMATED MT5 SETUP
+# 3. BACKGROUND WINE INITIALIZATION & PYTHON BRIDGE
 # =========================================================
 
 (
     set +e
-    echo "[3/4] Initializing Wine prefix environment..."
-
-    if [ ! -f "$WINEPREFIX/system.reg" ]; then
-        wineboot -i >"$LOG_DIR/wineboot.log" 2>&1
-        for i in $(seq 1 90); do
-            [ -f "$WINEPREFIX/system.reg" ] && break
-            sleep 1
-        done
-    else
-        wineboot -u >"$LOG_DIR/wineboot.log" 2>&1
-    fi
-
-    wine reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
-
-    MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
-    MT5_EXE="$MT5_DIR/terminal64.exe"
-
-    # Automated download, extraction, and file deployment
-    if [ ! -f "$MT5_EXE" ]; then
-        echo "Executing automated MetaTrader deployment sequence..."
-        cd /root
-        rm -f mt5setup.exe
-        wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe || true
-        
-        if [ -f "mt5setup.exe" ]; then
-            cabextract mt5setup.exe || true
-            mkdir -p "$MT5_DIR"
-            cp -rf * "$MT5_DIR/" || true
-        else
-            echo "ERROR: Failed to download mt5setup.exe"
-        fi
-    fi
-
-    if [ -f "$MT5_EXE" ]; then
-        echo "Launching MetaTrader 5 terminal: $MT5_EXE"
-        cd "$(dirname "$MT5_EXE")"
-        wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
-        sleep 10
-    else
-        echo "WARNING: terminal64.exe could not be verified automatically."
-    fi
+    echo "[3/4] Running background checks..."
+    
+    for i in $(seq 1 90); do
+        [ -f "$WINEPREFIX/system.reg" ] && break
+        sleep 1
+    done
 
     echo "[4/4] Starting Python mt5linux bridge on port 8001..."
     python3 -m mt5linux \
@@ -198,7 +182,7 @@ xterm -fa 'Monospace' -fs 10 -bg '#1e1e1e' -fg '#00ff00' -title "Railway System 
 ) >"$LOG_DIR/initialization.log" 2>&1 &
 
 # =========================================================
-# 3. KEEP CONTAINER ALIVE
+# 4. KEEP CONTAINER ALIVE
 # =========================================================
 
 echo "Container is running and healthy."
