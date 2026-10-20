@@ -99,15 +99,15 @@ mkdir -p /var/log/mt5 /root/.wine
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=================================================="
-echo "Railway MT5 Desktop Starting (Fast Port Bind)"
+echo "Railway MT5 Desktop Starting (Anti-Debugger Bypass)"
 echo "Date: $(date)"
 echo "=================================================="
 
 # ---------------------------------------------------------
-# 1. Start Display & Web Port IMMEDIATELY (Passes Healthcheck)
+# 1. Start Display & Web Port Immediately (Passes Healthcheck)
 # ---------------------------------------------------------
 
-echo "[1/4] Starting virtual display and web bridge..."
+echo "[1/5] Starting virtual display and web bridge..."
 
 pkill -x x11vnc 2>/dev/null || true
 pkill -x websockify 2>/dev/null || true
@@ -127,21 +127,34 @@ x11vnc \
     -rfbport 5900 \
     >/var/log/mt5/x11vnc.log 2>&1 &
 
-# Bind port 8080 instantly so Railway healthcheck succeeds right away
 websockify \
     --web=/usr/share/novnc \
     0.0.0.0:8080 \
     127.0.0.1:5900 \
     >/var/log/mt5/websockify.log 2>&1 &
 
-echo "Web bridge active on port 8080."
-
 # ---------------------------------------------------------
-# 2. Run Heavy Setup & Installation in the Background
+# 2. Background Task: Auto-Clicker Daemon for Error Popups
 # ---------------------------------------------------------
 
 (
-    echo "[2/4] Initializing Wine environment..."
+    while true; do
+        sleep 2
+        # Automatically find and click any 'OK' button or close window triggered by anti-debug popups
+        if command -v xdotool &> /dev/null; then
+            xdotool search --name "mt5setup.exe" windowactivate --sync key Return 2>/dev/null || true
+            xdotool search --name "Debugger" windowactivate --sync key Return 2>/dev/null || true
+        fi
+    done
+) &
+AUTO_CLICKER_PID=$!
+
+# ---------------------------------------------------------
+# 3. Background Setup & Installation
+# ---------------------------------------------------------
+
+(
+    echo "[2/5] Initializing Wine environment..."
     if [ ! -f "$WINEPREFIX/system.reg" ]; then
         wineboot -i
         for i in $(seq 1 60); do
@@ -153,14 +166,11 @@ echo "Web bridge active on port 8080."
     wineboot -u || true
     sleep 3
 
-    wine reg add \
-        "HKCU\\Software\\Wine\\WineDbg" \
-        /v ShowCrashDialog \
-        /t REG_DWORD \
-        /d 0 \
-        /f || true
+    # Force Wine to emulate Windows 10 and disable debugging hooks
+    wine reg add "HKCU\\Software\\Wine\\DllOverrides" /v "dbghelp" /t REG_SZ /d "" /f || true
+    wine reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
 
-    echo "[3/4] Checking MetaTrader 5 installation..."
+    echo "[3/5] Checking MetaTrader 5 installation..."
     MT5_EXE=""
     for candidate in \
         "/root/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe" \
@@ -185,7 +195,7 @@ echo "Web bridge active on port 8080."
             mv "$INSTALLER.tmp" "$INSTALLER"
         fi
 
-        echo "Installing MetaTrader 5 silently..."
+        echo "Running MetaTrader 5 installer with auto-bypass..."
         wine "$INSTALLER" /auto || true
         
         for i in $(seq 1 60); do
@@ -195,19 +205,21 @@ echo "Web bridge active on port 8080."
         done
     fi
 
+    kill $AUTO_CLICKER_PID 2>/dev/null || true
+
     if [ -n "$MT5_EXE" ] && [ -f "$MT5_EXE" ]; then
-        echo "Launching MetaTrader 5 from: $MT5_EXE"
+        echo "[4/5] Launching MetaTrader 5 from: $MT5_EXE"
         cd "$(dirname "$MT5_EXE")"
         wine "$MT5_EXE" >/var/log/mt5/terminal.log 2>&1 &
         sleep 10
     else
-        echo "WARNING: MetaTrader 5 executable not found yet. Check logs via VNC."
+        echo "WARNING: MetaTrader 5 executable not found. Check interface via noVNC."
     fi
 
-    echo "[4/4] Starting mt5linux bridge..."
+    echo "[5/5] Starting mt5linux bridge..."
     python3 -m mt5linux --host 0.0.0.0 --port 8001 >/var/log/mt5/bridge.log 2>&1 &
     
-    echo "Background initialization complete."
+    echo "Setup sequence finished."
 ) &
 
 # Keep main container process alive
