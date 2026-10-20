@@ -10,7 +10,7 @@ ENV WINEDEBUG=-all
 ENV PYTHONUNBUFFERED=1
 
 # =========================================================
-# 1. SYSTEM DEPENDENCIES AND WINE
+# 1. SYSTEM DEPENDENCIES & STABLE WINE (DEBIAN NATIVE)
 # =========================================================
 
 RUN dpkg --add-architecture i386 \
@@ -30,7 +30,9 @@ RUN dpkg --add-architecture i386 \
         websockify \
         net-tools \
         psmisc \
-        xterm \
+        wine \
+        wine64 \
+        wine32:i386 \
         fonts-liberation \
         fonts-dejavu-core \
         libgl1 \
@@ -48,19 +50,7 @@ RUN dpkg --add-architecture i386 \
         libfontconfig1 \
         libfreetype6 \
         libvulkan1 \
-        gpg \
-        gnupg \
         xauth \
-    && mkdir -p /etc/apt/keyrings \
-    && wget -q \
-        https://dl.winehq.org/wine-builds/winehq.key \
-        -O /etc/apt/keyrings/winehq-archive.key \
-    && wget -q \
-        https://dl.winehq.org/wine-builds/debian/dists/bookworm/winehq-bookworm.sources \
-        -O /etc/apt/sources.list.d/winehq-bookworm.sources \
-    && apt-get update \
-    && apt-get install -y --install-recommends winehq-staging \
-    && wine --version \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -81,7 +71,7 @@ RUN mkdir -p \
     /tmp/.X11-unix
 
 # =========================================================
-# 4. ENTRYPOINT
+# 4. ENTRYPOINT SCRIPT
 # =========================================================
 
 RUN cat > /entrypoint.sh <<'EOF'
@@ -101,27 +91,28 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway MT5 Desktop Terminal Ready"
+echo "Railway Stable Wine Desktop Boot"
 echo "Date: $(date)"
+echo "Wine Version: $(wine --version)"
 echo "=================================================="
 
 # =========================================================
-# 1. START DISPLAY & WEB PORT IMMEDIATELY (Passes Healthcheck)
+# 1. START DISPLAY & WEB PORT 8080 IMMEDIATELY (Healthcheck)
 # =========================================================
 
-echo "[1/5] Starting Xvfb..."
-Xvfb :1 \
-    -screen 0 1280x1024x24 \
-    -ac \
-    -nolisten tcp \
-    >"$LOG_DIR/xvfb.log" 2>&1 &
+echo "[1/4] Starting Xvfb and Fluxbox..."
+pkill -f 'Xvfb :1' 2>/dev/null || true
+pkill -x x11vnc 2>/dev/null || true
+pkill -x websockify 2>/dev/null || true
+pkill -x fluxbox 2>/dev/null || true
 
+Xvfb :1 -screen 0 1280x1024x24 -ac -nolisten tcp \
+    >"$LOG_DIR/xvfb.log" 2>&1 &
 sleep 2
 
-echo "[2/5] Starting Fluxbox..."
 fluxbox >"$LOG_DIR/fluxbox.log" 2>&1 &
 
-echo "[3/5] Starting VNC and noVNC on port 8080..."
+echo "[2/4] Starting VNC on port 5900 & noVNC on port 8080..."
 x11vnc \
     -display :1 \
     -forever \
@@ -131,20 +122,22 @@ x11vnc \
     -rfbport 5900 \
     >"$LOG_DIR/x11vnc.log" 2>&1 &
 
+# Bind port 8080 instantly for Railway health check compliance
 websockify \
     --web=/usr/share/novnc \
     0.0.0.0:8080 \
     127.0.0.1:5900 \
     >"$LOG_DIR/novnc.log" 2>&1 &
 
+echo "Web interface active on port 8080."
+
 # =========================================================
-# 2. WINE INITIALIZATION & ENVIRONMENT SETUP
+# 2. BACKGROUND WINE INITIALIZATION & TERMINAL LAUNCH
 # =========================================================
 
 (
     set +e
-
-    echo "[4/5] Initializing Wine prefix..."
+    echo "[3/4] Initializing Wine prefix environment..."
 
     if [ ! -f "$WINEPREFIX/system.reg" ]; then
         wineboot -i >"$LOG_DIR/wineboot.log" 2>&1
@@ -156,15 +149,14 @@ websockify \
         wineboot -u >"$LOG_DIR/wineboot.log" 2>&1
     fi
 
-    # Neutralize debugger detection registries
-    wine reg delete "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug" /f || true
+    # Suppress crash dialogs
     wine reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
 
     MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
     MT5_EXE="$MT5_DIR/terminal64.exe"
 
     if [ ! -f "$MT5_EXE" ]; then
-        echo "Attempting package retrieval..."
+        echo "Retrieving MetaTrader setup package..."
         mkdir -p "$MT5_DIR" /tmp/mt5_dl
         cd /tmp/mt5_dl
         
@@ -176,12 +168,10 @@ websockify \
         fi
     fi
 
-    # Broad search across drive_c for terminal executable
+    # Fallback search
     if [ ! -f "$MT5_EXE" ]; then
         FOUND_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
-        if [ -n "$FOUND_EXE" ]; then
-            MT5_EXE="$FOUND_EXE"
-        fi
+        [ -n "$FOUND_EXE" ] && MT5_EXE="$FOUND_EXE"
     fi
 
     if [ -n "$MT5_EXE" ] && [ -f "$MT5_EXE" ]; then
@@ -190,29 +180,24 @@ websockify \
         wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 10
     else
-        echo "NOTICE: MetaTrader binary not found automatically."
-        echo "You can open an xterm terminal via noVNC to install or drop files manually."
+        echo "NOTICE: Terminal executable not auto-extracted. Use noVNC interface to complete setup."
     fi
 
-    # =========================================================
-# 3. START PYTHON BRIDGE
-# =========================================================
-
-    echo "[5/5] Starting Python mt5linux bridge on port 8001..."
+    echo "[4/4] Starting Python mt5linux bridge on port 8001..."
     python3 -m mt5linux \
         --host 0.0.0.0 \
         --port 8001 \
         >"$LOG_DIR/bridge.log" 2>&1 &
 
-    echo "Background tasks initialized."
+    echo "Background sequence completed."
 
 ) >"$LOG_DIR/initialization.log" 2>&1 &
 
 # =========================================================
-# 4. KEEP CONTAINER ALIVE
+# 3. KEEP CONTAINER ALIVE
 # =========================================================
 
-echo "Container startup sequence completed successfully."
+echo "Container is running and healthy."
 
 while true; do
     if ! pgrep -f 'websockify.*8080' >/dev/null 2>&1; then
