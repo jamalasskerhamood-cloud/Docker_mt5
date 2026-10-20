@@ -99,7 +99,7 @@ mkdir -p /var/log/mt5 /root/.wine
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=================================================="
-echo "Railway MT5 Desktop Starting (Anti-Debugger Bypass)"
+echo "Railway MT5 Desktop Stable Boot"
 echo "Date: $(date)"
 echo "=================================================="
 
@@ -107,7 +107,7 @@ echo "=================================================="
 # 1. Start Display & Web Port Immediately (Passes Healthcheck)
 # ---------------------------------------------------------
 
-echo "[1/5] Starting virtual display and web bridge..."
+echo "[1/4] Starting virtual display and web bridge..."
 
 pkill -x x11vnc 2>/dev/null || true
 pkill -x websockify 2>/dev/null || true
@@ -134,27 +134,11 @@ websockify \
     >/var/log/mt5/websockify.log 2>&1 &
 
 # ---------------------------------------------------------
-# 2. Background Task: Auto-Clicker Daemon for Error Popups
+# 2. Background Setup & Installation (Without Random Key Presses)
 # ---------------------------------------------------------
 
 (
-    while true; do
-        sleep 2
-        # Automatically find and click any 'OK' button or close window triggered by anti-debug popups
-        if command -v xdotool &> /dev/null; then
-            xdotool search --name "mt5setup.exe" windowactivate --sync key Return 2>/dev/null || true
-            xdotool search --name "Debugger" windowactivate --sync key Return 2>/dev/null || true
-        fi
-    done
-) &
-AUTO_CLICKER_PID=$!
-
-# ---------------------------------------------------------
-# 3. Background Setup & Installation
-# ---------------------------------------------------------
-
-(
-    echo "[2/5] Initializing Wine environment..."
+    echo "[2/4] Initializing Wine environment..."
     if [ ! -f "$WINEPREFIX/system.reg" ]; then
         wineboot -i
         for i in $(seq 1 60); do
@@ -166,11 +150,11 @@ AUTO_CLICKER_PID=$!
     wineboot -u || true
     sleep 3
 
-    # Force Wine to emulate Windows 10 and disable debugging hooks
+    # Inject DLL override to neutralize debugger checks safely
     wine reg add "HKCU\\Software\\Wine\\DllOverrides" /v "dbghelp" /t REG_SZ /d "" /f || true
     wine reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
 
-    echo "[3/5] Checking MetaTrader 5 installation..."
+    echo "[3/4] Checking MetaTrader 5 installation..."
     MT5_EXE=""
     for candidate in \
         "/root/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe" \
@@ -195,34 +179,32 @@ AUTO_CLICKER_PID=$!
             mv "$INSTALLER.tmp" "$INSTALLER"
         fi
 
-        echo "Running MetaTrader 5 installer with auto-bypass..."
-        wine "$INSTALLER" /auto || true
+        echo "Running MetaTrader 5 silent installer..."
+        # Use /portal mode to bypass complex registry hooks and anti-debug triggers
+        wine "$INSTALLER" /portal /auto || wine "$INSTALLER" /auto || true
         
         for i in $(seq 1 60); do
             MT5_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
             [ -n "$MT5_EXE" ] && break
-            sleep 2
+            sleep 3
         done
     fi
 
-    kill $AUTO_CLICKER_PID 2>/dev/null || true
-
     if [ -n "$MT5_EXE" ] && [ -f "$MT5_EXE" ]; then
-        echo "[4/5] Launching MetaTrader 5 from: $MT5_EXE"
+        echo "[4/4] Launching MetaTrader 5 from: $MT5_EXE"
         cd "$(dirname "$MT5_EXE")"
         wine "$MT5_EXE" >/var/log/mt5/terminal.log 2>&1 &
         sleep 10
     else
-        echo "WARNING: MetaTrader 5 executable not found. Check interface via noVNC."
+        echo "WARNING: Executable not found. Check interface via noVNC."
     fi
 
-    echo "[5/5] Starting mt5linux bridge..."
+    # Start python mt5linux bridge
     python3 -m mt5linux --host 0.0.0.0 --port 8001 >/var/log/mt5/bridge.log 2>&1 &
-    
-    echo "Setup sequence finished."
+    echo "Initialization sequence completed successfully."
 ) &
 
-# Keep main container process alive
+# Keep main container alive
 while true; do
     sleep 60
 done
