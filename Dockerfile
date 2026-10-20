@@ -98,7 +98,7 @@ mkdir -p /var/log/mt5 /root/.wine
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=================================================="
-echo "Railway MT5 Direct Portable Boot"
+echo "Railway MT5 Forced Graphics Desktop Boot"
 echo "Date: $(date)"
 echo "=================================================="
 
@@ -112,6 +112,7 @@ pkill -x x11vnc 2>/dev/null || true
 pkill -x websockify 2>/dev/null || true
 pkill -x fluxbox 2>/dev/null || true
 
+# Force color depth and screen metrics explicitly
 Xvfb :1 -screen 0 1280x1024x24 -ac -nolisten tcp &
 sleep 2
 
@@ -130,10 +131,10 @@ websockify \
     --web=/usr/share/novnc \
     0.0.0.0:8080 \
     127.0.0.1:5900 \
-    >/var/log/mt5/websockify.log 2>&1 &
+    >/var/log/novnc.log 2>&1 &
 
 # ---------------------------------------------------------
-# 2. Setup Wine & Launch Terminal Directly Without Installer
+# 2. Setup Wine & Force Virtual Desktop Registry
 # ---------------------------------------------------------
 
 (
@@ -149,36 +150,47 @@ websockify \
     wineboot -u || true
     sleep 3
 
-    MT5_DIR="/root/.wine/drive_c/Program Files/MetaTrader 5"
-    MT5_EXE="$MT5_DIR/terminal64.exe"
+    # Force Wine applications to render inside a managed virtual desktop window matching Xvfb
+    wine reg add "HKCU\\Software\\Wine\\Explorer" /v "Desktop" /t REG_SZ /d "Default" /f || true
+    wine reg add "HKCU\\Software\\Wine\\Explorer\\Desktops" /v "Default" /t REG_SZ /d "1280x1024" /f || true
 
-    if [ ! -f "$MT5_EXE" ]; then
-        echo "[3/4] Downloading MetaTrader 5 direct portable package..."
-        mkdir -p /tmp/mt5_dl && cd /tmp/mt5_dl
-        
-        # Download official standalone package archive instead of the setup wizard
-        wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt55setup.exe -O mt5setup.exe || true
-        
-        # Extract files cleanly via cabextract without running the interactive installer binary
-        cabextract mt5setup.exe || unzip mt5setup.exe || true
-        
-        # Fallback: create directory structure if direct extraction needs assistance
-        mkdir -p "$MT5_DIR"
-        
-        # If terminal64 isn't populated, let's copy a minimal working layout or trigger silent installer with strict switches
-        wine msiexec /i mt5setup.exe /quiet /qn /norestart || true
+    echo "[3/4] Checking MetaTrader 5 installation..."
+    MT5_EXE=""
+    for candidate in \
+        "/root/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe" \
+        "/root/.wine/drive_c/Program Files/MetaTrader 5/terminal.exe" \
+        "/root/.wine/drive_c/Program Files (x86)/MetaTrader 5/terminal64.exe" \
+        "/root/.wine/drive_c/Program Files (x86)/MetaTrader 5/terminal.exe" \
+        "/root/mt5/terminal64.exe"
+    do
+        [ -f "$candidate" ] && MT5_EXE="$candidate" && break
+    done
+
+    if [ -z "$MT5_EXE" ]; then
+        MT5_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
     fi
 
-    # Dynamic search for terminal executable
-    if [ ! -f "$MT5_EXE" ]; then
-        FOUND_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
-        if [ -n "$FOUND_EXE" ]; then
-            MT5_EXE="$FOUND_EXE"
+    if [ -z "$MT5_EXE" ]; then
+        INSTALLER=/root/mt5setup.exe
+        if [ ! -s "$INSTALLER" ]; then
+            echo "Downloading MetaTrader 5 setup..."
+            wget --timeout=30 --tries=3 -O "$INSTALLER.tmp" \
+                "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"
+            mv "$INSTALLER.tmp" "$INSTALLER"
         fi
+
+        echo "Running silent setup..."
+        wine "$INSTALLER" /auto || true
+        
+        for i in $(seq 1 60); do
+            MT5_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
+            [ -n "$MT5_EXE" ] && break
+            sleep 3
+        done
     fi
 
     if [ -n "$MT5_EXE" ] && [ -f "$MT5_EXE" ]; then
-        echo "[4/4] Launching MetaTrader 5 terminal: $MT5_EXE"
+        echo "[4/4] Launching MetaTrader 5 with forced display context..."
         cd "$(dirname "$MT5_EXE")"
         wine "$MT5_EXE" /portable >/var/log/mt5/terminal.log 2>&1 &
         sleep 10
