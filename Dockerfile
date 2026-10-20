@@ -93,7 +93,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Stable Desktop Boot with Visual Shell"
+echo "Railway Fully Automated MT5 Desktop Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -115,7 +115,7 @@ sleep 2
 fluxbox >"$LOG_DIR/fluxbox.log" 2>&1 &
 sleep 1
 
-# Paint the desktop background dark gray so it's not a black void
+# Paint the desktop background dark gray
 xsetroot -solid "#2d2d2d" -display :1 || true
 
 echo "[2/4] Starting VNC on port 5900 & noVNC on port 8080..."
@@ -136,11 +136,11 @@ websockify \
 
 echo "Web interface active on port 8080."
 
-# Automatically pop up an xterm terminal window so you can see the desktop is alive
-xterm -fa 'Monospace' -fs 12 -bg '#1e1e1e' -fg '#00ff00' -title "Railway System Terminal" -e "echo 'Container shell ready. Type commands or check logs in /var/log/mt5/'; bash" &
+# Optional visual terminal window to monitor live logs if needed
+xterm -fa 'Monospace' -fs 10 -bg '#1e1e1e' -fg '#00ff00' -title "Railway System Terminal" -e "tail -f /var/log/mt5/startup.log" &
 
 # =========================================================
-# 2. BACKGROUND WINE INITIALIZATION & MT5 SETUP
+# 2. BACKGROUND WINE INITIALIZATION & AUTOMATED MT5 SETUP
 # =========================================================
 
 (
@@ -162,19 +162,29 @@ xterm -fa 'Monospace' -fs 12 -bg '#1e1e1e' -fg '#00ff00' -title "Railway System 
     MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
     MT5_EXE="$MT5_DIR/terminal64.exe"
 
-    # Search filesystem for terminal if missing
+    # Automated download, extraction, and file deployment
     if [ ! -f "$MT5_EXE" ]; then
-        FOUND_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
-        [ -n "$FOUND_EXE" ] && MT5_EXE="$FOUND_EXE"
+        echo "Executing automated MetaTrader deployment sequence..."
+        cd /root
+        rm -f mt5setup.exe
+        wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe || true
+        
+        if [ -f "mt5setup.exe" ]; then
+            cabextract mt5setup.exe || true
+            mkdir -p "$MT5_DIR"
+            cp -rf * "$MT5_DIR/" || true
+        else
+            echo "ERROR: Failed to download mt5setup.exe"
+        fi
     fi
 
-    if [ -n "$MT5_EXE" ] && [ -f "$MT5_EXE" ]; then
+    if [ -f "$MT5_EXE" ]; then
         echo "Launching MetaTrader 5 terminal: $MT5_EXE"
         cd "$(dirname "$MT5_EXE")"
         wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 10
     else
-        echo "NOTICE: MetaTrader binary not found. Use the on-screen terminal window to install or manage files."
+        echo "WARNING: terminal64.exe could not be verified automatically."
     fi
 
     echo "[4/4] Starting Python mt5linux bridge on port 8001..."
