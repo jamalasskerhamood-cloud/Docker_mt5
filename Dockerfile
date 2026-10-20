@@ -23,7 +23,6 @@ RUN dpkg --add-architecture i386 \
         cabextract \
         unzip \
         dos2unix \
-        xdotool \
         xvfb \
         fluxbox \
         x11vnc \
@@ -99,7 +98,7 @@ mkdir -p /var/log/mt5 /root/.wine
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=================================================="
-echo "Railway MT5 Desktop Stable Boot"
+echo "Railway MT5 Portable Boot Sequence"
 echo "Date: $(date)"
 echo "=================================================="
 
@@ -134,7 +133,7 @@ websockify \
     >/var/log/mt5/websockify.log 2>&1 &
 
 # ---------------------------------------------------------
-# 2. Background Setup & Installation (Without Random Key Presses)
+# 2. Background Setup with Portable Mode Bypass
 # ---------------------------------------------------------
 
 (
@@ -150,8 +149,7 @@ websockify \
     wineboot -u || true
     sleep 3
 
-    # Inject DLL override to neutralize debugger checks safely
-    wine reg add "HKCU\\Software\\Wine\\DllOverrides" /v "dbghelp" /t REG_SZ /d "" /f || true
+    # Suppress crash dialogs & enforce silent environment handling
     wine reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
 
     echo "[3/4] Checking MetaTrader 5 installation..."
@@ -173,14 +171,14 @@ websockify \
     if [ -z "$MT5_EXE" ]; then
         INSTALLER=/root/mt5setup.exe
         if [ ! -s "$INSTALLER" ]; then
-            echo "Downloading MetaTrader 5 installer..."
+            echo "Downloading MetaTrader 5 setup..."
             wget --timeout=30 --tries=3 -O "$INSTALLER.tmp" \
                 "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"
             mv "$INSTALLER.tmp" "$INSTALLER"
         fi
 
-        echo "Running MetaTrader 5 silent installer..."
-        # Use /portal mode to bypass complex registry hooks and anti-debug triggers
+        echo "Installing MetaTrader 5 in Portable / Portal Mode..."
+        # /portal forces a portable standalone setup structure, bypassing standard security traps
         wine "$INSTALLER" /portal /auto || wine "$INSTALLER" /auto || true
         
         for i in $(seq 1 60); do
@@ -196,15 +194,15 @@ websockify \
         wine "$MT5_EXE" >/var/log/mt5/terminal.log 2>&1 &
         sleep 10
     else
-        echo "WARNING: Executable not found. Check interface via noVNC."
+        echo "WARNING: Executable not found. Open noVNC port 8080 to inspect."
     fi
 
     # Start python mt5linux bridge
     python3 -m mt5linux --host 0.0.0.0 --port 8001 >/var/log/mt5/bridge.log 2>&1 &
-    echo "Initialization sequence completed successfully."
+    echo "Initialization sequence completed."
 ) &
 
-# Keep main container alive
+# Keep main container process alive
 while true; do
     sleep 60
 done
