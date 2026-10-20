@@ -98,15 +98,15 @@ mkdir -p /var/log/mt5 /root/.wine
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=================================================="
-echo "Railway MT5 Ultimate Anti-Debug Bypass Boot"
+echo "Railway MT5 Instant Web Bind Boot"
 echo "Date: $(date)"
 echo "=================================================="
 
 # ---------------------------------------------------------
-# 1. Start Display & Web Port Immediately (Passes Healthcheck)
+# 1. Start Web & VNC Services IMMEDIATELY (Passes Healthcheck)
 # ---------------------------------------------------------
 
-echo "[1/4] Starting virtual display and web bridge..."
+echo "[1/3] Starting display servers and web port 8080..."
 
 pkill -x x11vnc 2>/dev/null || true
 pkill -x websockify 2>/dev/null || true
@@ -126,18 +126,21 @@ x11vnc \
     -rfbport 5900 \
     >/var/log/mt5/x11vnc.log 2>&1 &
 
+# Bind port 8080 instantly so Railway health check succeeds right away
 websockify \
     --web=/usr/share/novnc \
     0.0.0.0:8080 \
     127.0.0.1:5900 \
     >/var/log/novnc.log 2>&1 &
 
+echo "Web bridge is active on port 8080."
+
 # ---------------------------------------------------------
-# 2. Setup Wine & Neutralize Debugger Keys
+# 2. Run Wine & MT5 Setup in the Background
 # ---------------------------------------------------------
 
 (
-    echo "[2/4] Initializing Wine environment..."
+    echo "[2/3] Initializing Wine environment..."
     if [ ! -f "$WINEPREFIX/system.reg" ]; then
         wineboot -i
         for i in $(seq 1 60); do
@@ -149,13 +152,12 @@ websockify \
     wineboot -u || true
     sleep 3
 
-    # CRITICAL: Delete the Windows AeDebug registry key that triggers the debugger warning
-    echo "Neutralizing Wine debugging hooks..."
+    # Neutralize Wine debugging hooks to bypass anti-cheat checks
     wine reg delete "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug" /f || true
     wine reg add "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug" /v "Auto" /t REG_SZ /d "0" /f || true
     wine reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
 
-    echo "[3/4] Checking MetaTrader 5 installation..."
+    echo "[3/3] Checking MetaTrader 5 installation..."
     MT5_EXE=""
     for candidate in \
         "/root/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe" \
@@ -180,7 +182,7 @@ websockify \
             mv "$INSTALLER.tmp" "$INSTALLER"
         fi
 
-        echo "Running clean installation..."
+        echo "Running installation..."
         wine "$INSTALLER" /auto || true
         
         for i in $(seq 1 60); do
@@ -191,20 +193,20 @@ websockify \
     fi
 
     if [ -n "$MT5_EXE" ] && [ -f "$MT5_EXE" ]; then
-        echo "[4/4] Launching MetaTrader 5..."
+        echo "Launching MetaTrader 5 terminal..."
         cd "$(dirname "$MT5_EXE")"
         wine "$MT5_EXE" /portable >/var/log/mt5/terminal.log 2>&1 &
         sleep 10
     else
-        echo "WARNING: Terminal executable needs manual check via noVNC."
+        echo "WARNING: Executable not found. Check interface via noVNC."
     fi
 
     # Start python mt5linux bridge
     python3 -m mt5linux --host 0.0.0.0 --port 8001 >/var/log/mt5/bridge.log 2>&1 &
-    echo "Initialization sequence completed."
+    echo "Background tasks initialized."
 ) &
 
-# Keep main container process alive
+# Keep main process alive to ensure port 8080 stays open for Railway
 while true; do
     sleep 60
 done
