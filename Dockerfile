@@ -10,7 +10,7 @@ ENV WINEDEBUG=-all
 ENV PYTHONUNBUFFERED=1
 
 # =========================================================
-# 1. SYSTEM DEPENDENCIES & STABLE WINE (DEBIAN NATIVE)
+# 1. SYSTEM DEPENDENCIES & STABLE WINE
 # =========================================================
 
 RUN dpkg --add-architecture i386 \
@@ -30,6 +30,8 @@ RUN dpkg --add-architecture i386 \
         websockify \
         net-tools \
         psmisc \
+        xterm \
+        x11-xserver-utils \
         wine \
         wine64 \
         wine32:i386 \
@@ -91,7 +93,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Stable Wine Desktop Boot"
+echo "Railway Stable Desktop Boot with Visual Shell"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -111,6 +113,10 @@ Xvfb :1 -screen 0 1280x1024x24 -ac -nolisten tcp \
 sleep 2
 
 fluxbox >"$LOG_DIR/fluxbox.log" 2>&1 &
+sleep 1
+
+# Paint the desktop background dark gray so it's not a black void
+xsetroot -solid "#2d2d2d" -display :1 || true
 
 echo "[2/4] Starting VNC on port 5900 & noVNC on port 8080..."
 x11vnc \
@@ -122,7 +128,6 @@ x11vnc \
     -rfbport 5900 \
     >"$LOG_DIR/x11vnc.log" 2>&1 &
 
-# Bind port 8080 instantly for Railway health check compliance
 websockify \
     --web=/usr/share/novnc \
     0.0.0.0:8080 \
@@ -131,8 +136,11 @@ websockify \
 
 echo "Web interface active on port 8080."
 
+# Automatically pop up an xterm terminal window so you can see the desktop is alive
+xterm -fa 'Monospace' -fs 12 -bg '#1e1e1e' -fg '#00ff00' -title "Railway System Terminal" -e "echo 'Container shell ready. Type commands or check logs in /var/log/mt5/'; bash" &
+
 # =========================================================
-# 2. BACKGROUND WINE INITIALIZATION & TERMINAL LAUNCH
+# 2. BACKGROUND WINE INITIALIZATION & MT5 SETUP
 # =========================================================
 
 (
@@ -149,26 +157,12 @@ echo "Web interface active on port 8080."
         wineboot -u >"$LOG_DIR/wineboot.log" 2>&1
     fi
 
-    # Suppress crash dialogs
     wine reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
 
     MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
     MT5_EXE="$MT5_DIR/terminal64.exe"
 
-    if [ ! -f "$MT5_EXE" ]; then
-        echo "Retrieving MetaTrader setup package..."
-        mkdir -p "$MT5_DIR" /tmp/mt5_dl
-        cd /tmp/mt5_dl
-        
-        wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe -O mt5setup.exe || true
-        cabextract -d /tmp/extracted mt5setup.exe || true
-        
-        if [ -d "/tmp/extracted" ]; then
-            cp -rf /tmp/extracted/* "$MT5_DIR/" || true
-        fi
-    fi
-
-    # Fallback search
+    # Search filesystem for terminal if missing
     if [ ! -f "$MT5_EXE" ]; then
         FOUND_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
         [ -n "$FOUND_EXE" ] && MT5_EXE="$FOUND_EXE"
@@ -180,7 +174,7 @@ echo "Web interface active on port 8080."
         wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 10
     else
-        echo "NOTICE: Terminal executable not auto-extracted. Use noVNC interface to complete setup."
+        echo "NOTICE: MetaTrader binary not found. Use the on-screen terminal window to install or manage files."
     fi
 
     echo "[4/4] Starting Python mt5linux bridge on port 8001..."
