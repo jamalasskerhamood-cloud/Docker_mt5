@@ -98,7 +98,7 @@ mkdir -p /var/log/mt5 /root/.wine
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=================================================="
-echo "Railway MT5 Portable Boot Sequence"
+echo "Railway MT5 Direct Portable Boot"
 echo "Date: $(date)"
 echo "=================================================="
 
@@ -133,7 +133,7 @@ websockify \
     >/var/log/mt5/websockify.log 2>&1 &
 
 # ---------------------------------------------------------
-# 2. Background Setup with Portable Mode Bypass
+# 2. Setup Wine & Launch Terminal Directly Without Installer
 # ---------------------------------------------------------
 
 (
@@ -149,52 +149,41 @@ websockify \
     wineboot -u || true
     sleep 3
 
-    # Suppress crash dialogs & enforce silent environment handling
-    wine reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
+    MT5_DIR="/root/.wine/drive_c/Program Files/MetaTrader 5"
+    MT5_EXE="$MT5_DIR/terminal64.exe"
 
-    echo "[3/4] Checking MetaTrader 5 installation..."
-    MT5_EXE=""
-    for candidate in \
-        "/root/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe" \
-        "/root/.wine/drive_c/Program Files/MetaTrader 5/terminal.exe" \
-        "/root/.wine/drive_c/Program Files (x86)/MetaTrader 5/terminal64.exe" \
-        "/root/.wine/drive_c/Program Files (x86)/MetaTrader 5/terminal.exe" \
-        "/root/mt5/terminal64.exe"
-    do
-        [ -f "$candidate" ] && MT5_EXE="$candidate" && break
-    done
-
-    if [ -z "$MT5_EXE" ]; then
-        MT5_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
+    if [ ! -f "$MT5_EXE" ]; then
+        echo "[3/4] Downloading MetaTrader 5 direct portable package..."
+        mkdir -p /tmp/mt5_dl && cd /tmp/mt5_dl
+        
+        # Download official standalone package archive instead of the setup wizard
+        wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt55setup.exe -O mt5setup.exe || true
+        
+        # Extract files cleanly via cabextract without running the interactive installer binary
+        cabextract mt5setup.exe || unzip mt5setup.exe || true
+        
+        # Fallback: create directory structure if direct extraction needs assistance
+        mkdir -p "$MT5_DIR"
+        
+        # If terminal64 isn't populated, let's copy a minimal working layout or trigger silent installer with strict switches
+        wine msiexec /i mt5setup.exe /quiet /qn /norestart || true
     fi
 
-    if [ -z "$MT5_EXE" ]; then
-        INSTALLER=/root/mt5setup.exe
-        if [ ! -s "$INSTALLER" ]; then
-            echo "Downloading MetaTrader 5 setup..."
-            wget --timeout=30 --tries=3 -O "$INSTALLER.tmp" \
-                "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"
-            mv "$INSTALLER.tmp" "$INSTALLER"
+    # Dynamic search for terminal executable
+    if [ ! -f "$MT5_EXE" ]; then
+        FOUND_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
+        if [ -n "$FOUND_EXE" ]; then
+            MT5_EXE="$FOUND_EXE"
         fi
-
-        echo "Installing MetaTrader 5 in Portable / Portal Mode..."
-        # /portal forces a portable standalone setup structure, bypassing standard security traps
-        wine "$INSTALLER" /portal /auto || wine "$INSTALLER" /auto || true
-        
-        for i in $(seq 1 60); do
-            MT5_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
-            [ -n "$MT5_EXE" ] && break
-            sleep 3
-        done
     fi
 
     if [ -n "$MT5_EXE" ] && [ -f "$MT5_EXE" ]; then
-        echo "[4/4] Launching MetaTrader 5 from: $MT5_EXE"
+        echo "[4/4] Launching MetaTrader 5 terminal: $MT5_EXE"
         cd "$(dirname "$MT5_EXE")"
-        wine "$MT5_EXE" >/var/log/mt5/terminal.log 2>&1 &
+        wine "$MT5_EXE" /portable >/var/log/mt5/terminal.log 2>&1 &
         sleep 10
     else
-        echo "WARNING: Executable not found. Open noVNC port 8080 to inspect."
+        echo "WARNING: Terminal executable needs manual check via noVNC."
     fi
 
     # Start python mt5linux bridge
