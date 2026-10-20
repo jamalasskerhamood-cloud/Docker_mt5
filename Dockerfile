@@ -30,7 +30,6 @@ RUN dpkg --add-architecture i386 \
         websockify \
         net-tools \
         psmisc \
-        xterm \
         x11-xserver-utils \
         wine \
         wine64 \
@@ -93,7 +92,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Fully Automated MT5 Boot"
+echo "Railway MT5 Direct Auto-Launch Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -136,7 +135,7 @@ websockify \
 echo "Web interface active on port 8080."
 
 # =========================================================
-# 2. BACKGROUND WINE INITIALIZATION & AUTOMATED MT5 SETUP
+# 2. BACKGROUND WINE INITIALIZATION & MT5 EXTRACTION
 # =========================================================
 
 (
@@ -158,30 +157,36 @@ echo "Web interface active on port 8080."
     MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
     MT5_EXE="$MT5_DIR/terminal64.exe"
 
-    # Automated download and extraction sequence
     if [ ! -f "$MT5_EXE" ]; then
-        echo "Executing automated MetaTrader deployment..."
-        cd /root
+        echo "Extracting MetaTrader files directly into Program Files..."
+        mkdir -p /tmp/mt5_dl "$MT5_DIR"
+        cd /tmp/mt5_dl
+        
         wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe -O mt5setup.exe || true
         cabextract mt5setup.exe || true
-        mkdir -p "$MT5_DIR"
         cp -rf * "$MT5_DIR/" || true
     fi
 
-    if [ -f "$MT5_EXE" ]; then
-        echo "Launching MetaTrader 5 terminal in portable mode..."
+    # Fallback search if path differs
+    if [ ! -f "$MT5_EXE" ]; then
+        FOUND_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
+        [ -n "$FOUND_EXE" ] && MT5_EXE="$FOUND_EXE"
+    fi
+
+    if [ -n "$MT5_EXE" ] && [ -f "$MT5_EXE" ]; then
+        echo "Launching MetaTrader 5 terminal: $MT5_EXE"
         cd "$(dirname "$MT5_EXE")"
         wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 10
     else
-        echo "WARNING: terminal64.exe could not be verified automatically."
+        echo "WARNING: terminal64.exe could not be located."
     fi
 
     echo "[4/4] Starting Python mt5linux bridge on port 8001..."
     python3 -m mt5linux \
         --host 0.0.0.0 \
         --port 8001 \
-        >"$LOG_DIR/bridge.log" 2>&1 &
+        >/var/log/mt5/bridge.log 2>&1 &
 
     echo "Background sequence completed."
 
