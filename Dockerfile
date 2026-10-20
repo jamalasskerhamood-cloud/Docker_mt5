@@ -20,7 +20,6 @@ RUN dpkg --add-architecture i386 \
         wget \
         curl \
         procps \
-        cabextract \
         unzip \
         dos2unix \
         xvfb \
@@ -93,7 +92,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway MT5 Direct Mirror Boot"
+echo "Railway MT5 Direct Portable Archive Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -136,7 +135,7 @@ websockify \
 echo "Web interface active on port 8080."
 
 # =========================================================
-# 2. AUTOMATED LIVE TERMINAL INSTALLATION VIA DIRECT MIRROR
+# 2. AUTOMATED DIRECT PORTABLE DEPLOYMENT
 # =========================================================
 
 xterm -fa 'Monospace' -fs 10 -bg '#1e1e1e' -fg '#00ff00' -title "MT5 Automated Setup" -e "
@@ -144,26 +143,19 @@ echo 'Initializing Wine Environment...'
 wineboot -i
 wine reg add 'HKCU\\Software\\Wine\\WineDbg' /v 'ShowCrashDialog' /t REG_DWORD /d 0 /f || true
 
-echo 'Setting up MetaTrader 5 Directory...'
 MT5_DIR='/root/.wine/drive_c/Program Files/MetaTrader 5'
 mkdir -p \"\$MT5_DIR\"
-cd /root
 
-echo 'Downloading direct MetaTrader package...'
-wget -q https://www.metatrader5.com/cdn/mt5setup.exe -O mt5setup.exe || true
-
-if [ -f \"mt5setup.exe\" ]; then
-    cabextract mt5setup.exe -d /tmp/mt5_extracted || true
-    if [ -d \"/tmp/mt5_extracted\" ]; then
-        cp -rf /tmp/mt5_extracted/* \"\$MT5_DIR/\" || true
-    fi
-fi
-
-# Fallback: if files are missing, use wine silent installer flags
+echo 'Checking terminal binary...'
 if [ ! -f \"\$MT5_DIR/terminal64.exe\" ]; then
-    echo 'Running silent installer fallback...'
-    wine /root/mt5setup.exe /auto || true
-    sleep 10
+    echo 'Downloading direct portable MetaTrader package...'
+    cd /tmp
+    # Alternative direct mirror containing packed terminal binaries
+    wget -q https://github.com/shahed269/mt5-docker/raw/main/mt5.zip -O mt5.zip || true
+    if [ -f \"mt5.zip\" ]; then
+        unzip -qo mt5.zip -d /tmp/mt5_unpacked || true
+        cp -rf /tmp/mt5_unpacked/* \"\$MT5_DIR/\" || true
+    fi
 fi
 
 MT5_EXE=\$(find \"/root/.wine/drive_c\" -type f -name \"terminal64.exe\" -print -quit)
@@ -173,7 +165,7 @@ if [ -n \"\$MT5_EXE\" ]; then
     cd \"\$(dirname \"\$MT5_EXE\")\"
     wine \"\$MT5_EXE\" /portable
 else
-    echo 'ERROR: terminal64.exe could not be found. Please check setup.'
+    echo 'WARNING: Portable package not found. You can drop files manually or use shell.'
     bash
 fi
 " &
