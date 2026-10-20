@@ -98,7 +98,7 @@ mkdir -p /var/log/mt5 /root/.wine
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=================================================="
-echo "Railway MT5 Forced Graphics Desktop Boot"
+echo "Railway MT5 Ultimate Anti-Debug Bypass Boot"
 echo "Date: $(date)"
 echo "=================================================="
 
@@ -112,7 +112,6 @@ pkill -x x11vnc 2>/dev/null || true
 pkill -x websockify 2>/dev/null || true
 pkill -x fluxbox 2>/dev/null || true
 
-# Force color depth and screen metrics explicitly
 Xvfb :1 -screen 0 1280x1024x24 -ac -nolisten tcp &
 sleep 2
 
@@ -134,7 +133,7 @@ websockify \
     >/var/log/novnc.log 2>&1 &
 
 # ---------------------------------------------------------
-# 2. Setup Wine & Force Virtual Desktop Registry
+# 2. Setup Wine & Neutralize Debugger Keys
 # ---------------------------------------------------------
 
 (
@@ -150,9 +149,11 @@ websockify \
     wineboot -u || true
     sleep 3
 
-    # Force Wine applications to render inside a managed virtual desktop window matching Xvfb
-    wine reg add "HKCU\\Software\\Wine\\Explorer" /v "Desktop" /t REG_SZ /d "Default" /f || true
-    wine reg add "HKCU\\Software\\Wine\\Explorer\\Desktops" /v "Default" /t REG_SZ /d "1280x1024" /f || true
+    # CRITICAL: Delete the Windows AeDebug registry key that triggers the debugger warning
+    echo "Neutralizing Wine debugging hooks..."
+    wine reg delete "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug" /f || true
+    wine reg add "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug" /v "Auto" /t REG_SZ /d "0" /f || true
+    wine reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
 
     echo "[3/4] Checking MetaTrader 5 installation..."
     MT5_EXE=""
@@ -179,7 +180,7 @@ websockify \
             mv "$INSTALLER.tmp" "$INSTALLER"
         fi
 
-        echo "Running silent setup..."
+        echo "Running clean installation..."
         wine "$INSTALLER" /auto || true
         
         for i in $(seq 1 60); do
@@ -190,7 +191,7 @@ websockify \
     fi
 
     if [ -n "$MT5_EXE" ] && [ -f "$MT5_EXE" ]; then
-        echo "[4/4] Launching MetaTrader 5 with forced display context..."
+        echo "[4/4] Launching MetaTrader 5..."
         cd "$(dirname "$MT5_EXE")"
         wine "$MT5_EXE" /portable >/var/log/mt5/terminal.log 2>&1 &
         sleep 10
