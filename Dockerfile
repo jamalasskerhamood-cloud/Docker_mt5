@@ -93,7 +93,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Fully Automated MT5 Desktop Boot"
+echo "Railway MT5 Direct Mirror Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -115,7 +115,6 @@ sleep 2
 fluxbox >"$LOG_DIR/fluxbox.log" 2>&1 &
 sleep 1
 
-# Paint the desktop background dark gray
 xsetroot -solid "#2d2d2d" -display :1 || true
 
 echo "[2/4] Starting VNC on port 5900 & noVNC on port 8080..."
@@ -137,35 +136,54 @@ websockify \
 echo "Web interface active on port 8080."
 
 # =========================================================
-# 2. AUTOMATED LIVE TERMINAL INSTALLATION & LAUNCH
+# 2. AUTOMATED LIVE TERMINAL INSTALLATION VIA DIRECT MIRROR
 # =========================================================
 
-# This xterm window will automatically run the setup commands live on your screen
 xterm -fa 'Monospace' -fs 10 -bg '#1e1e1e' -fg '#00ff00' -title "MT5 Automated Setup" -e "
 echo 'Initializing Wine Environment...'
 wineboot -i
 wine reg add 'HKCU\\Software\\Wine\\WineDbg' /v 'ShowCrashDialog' /t REG_DWORD /d 0 /f || true
 
-echo 'Downloading and extracting MetaTrader 5...'
+echo 'Setting up MetaTrader 5 Directory...'
+MT5_DIR='/root/.wine/drive_c/Program Files/MetaTrader 5'
+mkdir -p \"\$MT5_DIR\"
 cd /root
-wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe
-cabextract mt5setup.exe
-mkdir -p '/root/.wine/drive_c/Program Files/MetaTrader 5'
-cp -rf * '/root/.wine/drive_c/Program Files/MetaTrader 5/'
 
-echo 'Launching MetaTrader 5 in portable mode...'
-wine '/root/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe' /portable
-bash
+echo 'Downloading direct MetaTrader package...'
+wget -q https://www.metatrader5.com/cdn/mt5setup.exe -O mt5setup.exe || true
+
+if [ -f \"mt5setup.exe\" ]; then
+    cabextract mt5setup.exe -d /tmp/mt5_extracted || true
+    if [ -d \"/tmp/mt5_extracted\" ]; then
+        cp -rf /tmp/mt5_extracted/* \"\$MT5_DIR/\" || true
+    fi
+fi
+
+# Fallback: if files are missing, use wine silent installer flags
+if [ ! -f \"\$MT5_DIR/terminal64.exe\" ]; then
+    echo 'Running silent installer fallback...'
+    wine /root/mt5setup.exe /auto || true
+    sleep 10
+fi
+
+MT5_EXE=\$(find \"/root/.wine/drive_c\" -type f -name \"terminal64.exe\" -print -quit)
+
+if [ -n \"\$MT5_EXE\" ]; then
+    echo 'Launching MetaTrader 5 in portable mode...'
+    cd \"\$(dirname \"\$MT5_EXE\")\"
+    wine \"\$MT5_EXE\" /portable
+else
+    echo 'ERROR: terminal64.exe could not be found. Please check setup.'
+    bash
+fi
 " &
 
 # =========================================================
-# 3. BACKGROUND WINE INITIALIZATION & PYTHON BRIDGE
+# 3. BACKGROUND PYTHON BRIDGE
 # =========================================================
 
 (
     set +e
-    echo "[3/4] Running background checks..."
-    
     for i in $(seq 1 90); do
         [ -f "$WINEPREFIX/system.reg" ] && break
         sleep 1
