@@ -10,7 +10,7 @@ ENV WINEDEBUG=-all
 ENV PYTHONUNBUFFERED=1
 
 # =========================================================
-# SYSTEM DEPENDENCIES AND WINE
+# 1. SYSTEM DEPENDENCIES AND WINE
 # =========================================================
 
 RUN dpkg --add-architecture i386 \
@@ -49,6 +49,7 @@ RUN dpkg --add-architecture i386 \
         libvulkan1 \
         gpg \
         gnupg \
+        xauth \
     && mkdir -p /etc/apt/keyrings \
     && wget -q \
         https://dl.winehq.org/wine-builds/winehq.key \
@@ -57,18 +58,19 @@ RUN dpkg --add-architecture i386 \
         https://dl.winehq.org/wine-builds/debian/dists/bookworm/winehq-bookworm.sources \
         -O /etc/apt/sources.list.d/winehq-bookworm.sources \
     && apt-get update \
-    && apt-get install -y --install-recommends winehq-stable \
+    && apt-get install -y --install-recommends winehq-staging \
+    && wine --version \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # =========================================================
-# PYTHON BRIDGE
+# 2. PYTHON BRIDGE
 # =========================================================
 
 RUN pip install --no-cache-dir mt5linux rpyc
 
 # =========================================================
-# DIRECTORY SETUP
+# 3. DIRECTORIES
 # =========================================================
 
 RUN mkdir -p \
@@ -78,7 +80,7 @@ RUN mkdir -p \
     /tmp/.X11-unix
 
 # =========================================================
-# ENTRYPOINT
+# 4. ENTRYPOINT
 # =========================================================
 
 RUN cat > /entrypoint.sh <<'EOF'
@@ -93,29 +95,48 @@ export WINEDEBUG=-all
 export PYTHONUNBUFFERED=1
 
 LOG=/var/log/mt5/startup.log
+
 mkdir -p /var/log/mt5 /root/.wine
 
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=================================================="
-echo "Railway MT5 Portable Bypass Boot"
+echo "Railway MT5 Desktop Startup"
 echo "Date: $(date)"
 echo "=================================================="
 
 # ---------------------------------------------------------
-# 1. Start Web & VNC Services IMMEDIATELY (Passes Healthcheck)
+# 1. Start the graphical desktop
 # ---------------------------------------------------------
 
-echo "[1/3] Starting display servers and web port 8080..."
+echo "[1/5] Starting Xvfb..."
 
-pkill -x x11vnc 2>/dev/null || true
-pkill -x websockify 2>/dev/null || true
-pkill -x fluxbox 2>/dev/null || true
+if ! pgrep -f 'Xvfb :1 ' >/dev/null 2>&1; then
+    Xvfb :1 -screen 0 1280x1024x24 -ac -nolisten tcp \
+        >/var/log/mt5/xvfb.log 2>&1 &
+fi
 
-Xvfb :1 -screen 0 1280x1024x24 -ac -nolisten tcp &
-sleep 2
+for i in $(seq 1 30); do
+    if xdpyinfo -display :1 >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+
+if ! xdpyinfo -display :1 >/dev/null 2>&1; then
+    echo "ERROR: Xvfb failed to start."
+    exit 1
+fi
+
+echo "[2/5] Starting Fluxbox..."
 
 fluxbox >/var/log/mt5/fluxbox.log 2>&1 &
+
+# ---------------------------------------------------------
+# 2. Start VNC and noVNC
+# ---------------------------------------------------------
+
+echo "[3/5] Starting VNC and noVNC..."
 
 x11vnc \
     -display :1 \
@@ -126,81 +147,151 @@ x11vnc \
     -rfbport 5900 \
     >/var/log/mt5/x11vnc.log 2>&1 &
 
+for i in $(seq 1 15); do
+    if (echo > /dev/tcp/127.0.0.1/5900) >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+
 websockify \
     --web=/usr/share/novnc \
     0.0.0.0:8080 \
     127.0.0.1:5900 \
-    >/var/log/novnc.log 2>&1 &
-
-echo "Web bridge is active on port 8080."
+    >/var/log/mt5/novnc.log 2>&1 &
 
 # ---------------------------------------------------------
-# 2. Wine Init & Direct Terminal Extraction (No Web Installer)
+# 3. Initialize Wine
 # ---------------------------------------------------------
 
 (
-    echo "[2/3] Initializing Wine environment..."
+    set +e
+
+    echo "[4/5] Checking Wine installation..."
+
+    wine --version
+
     if [ ! -f "$WINEPREFIX/system.reg" ]; then
+        echo "Initializing a fresh Wine prefix..."
+
         wineboot -i
-        for i in $(seq 1 60); do
+
+        for i in $(seq 1 90); do
             [ -f "$WINEPREFIX/system.reg" ] && break
             sleep 1
         done
+    else
+        echo "Existing Wine prefix detected."
+        wineboot -u
     fi
 
-    wineboot -u || true
+    if [ ! -f "$WINEPREFIX/system.reg" ]; then
+        echo "ERROR: Wine prefix initialization failed."
+        exit 1
+    fi
+
     sleep 3
 
-    MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
-    MT5_EXE="$MT5_DIR/terminal64.exe"
+    # -----------------------------------------------------
+    # 4. Locate an existing MT5 terminal
+    # -----------------------------------------------------
 
-    if [ ! -f "$MT5_EXE" ]; then
-        echo "[3/3] Setting up MetaTrader 5 portable structure..."
-        mkdir -p "$MT5_DIR"
-        
-        # Instead of mt5setup.exe which triggers the debugger popup, 
-        # download a direct package or use cabextract on the official payload if available,
-        # or initialize a blank structural terminal directory structure.
-        cd /tmp
-        wget -q https://www.metatrader5.com/cdn/mt5setup.exe -O raw_setup.exe || true
-        cabextract -d /tmp/extracted raw_setup.exe || true
-        
-        if [ -d "/tmp/extracted" ]; then
-            cp -rf /tmp/extracted/* "$MT5_DIR/" || true
+    MT5_EXE=""
+
+    for candidate in \
+        "/root/mt5/terminal64.exe" \
+        "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/terminal64.exe" \
+        "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/terminal.exe" \
+        "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/terminal64.exe"
+    do
+        if [ -f "$candidate" ]; then
+            MT5_EXE="$candidate"
+            break
         fi
+    done
+
+    # Search the Wine C: drive if the usual locations are empty.
+    if [ -z "$MT5_EXE" ]; then
+        MT5_EXE=$(find "$WINEPREFIX/drive_c" \
+            -type f \
+            \( -iname "terminal64.exe" -o -iname "terminal.exe" \) \
+            -print -quit 2>/dev/null)
     fi
 
-    # Fallback search
-    if [ ! -f "$MT5_EXE" ]; then
-        FOUND_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
-        if [ -n "$FOUND_EXE" ]; then
-            MT5_EXE="$FOUND_EXE"
-        fi
-    fi
+    # -----------------------------------------------------
+    # 5. Launch MT5 only if a real terminal exists
+    # -----------------------------------------------------
 
     if [ -n "$MT5_EXE" ] && [ -f "$MT5_EXE" ]; then
-        echo "Launching MetaTrader 5 terminal in portable mode..."
-        cd "$(dirname "$MT5_EXE")"
-        wine "$MT5_EXE" /portable >/var/log/mt5/terminal.log 2>&1 &
+        echo "Found MT5 terminal: $MT5_EXE"
+
+        MT5_DIR=$(dirname "$MT5_EXE")
+
+        cd "$MT5_DIR"
+
+        echo "Launching MT5 in portable mode..."
+
+        wine "$MT5_EXE" /portable \
+            >/var/log/mt5/terminal.log 2>&1 &
+
+        MT5_PID=$!
+
         sleep 10
+
+        if kill -0 "$MT5_PID" 2>/dev/null; then
+            echo "MT5 launch process is still running."
+        else
+            echo "WARNING: MT5 process exited."
+            echo "Check /var/log/mt5/terminal.log"
+        fi
     else
-        echo "WARNING: Executable not found. Terminal layout ready for manual setup via noVNC."
+        echo "WARNING: No installed MT5 terminal was found."
+        echo "The official setup program is NOT being extracted."
+        echo "Install MT5 using a compatible installer through noVNC."
     fi
 
-    # Start python mt5linux bridge
-    python3 -m mt5linux --host 0.0.0.0 --port 8001 >/var/log/mt5/bridge.log 2>&1 &
-    echo "Background tasks initialized."
-) &
+    # -----------------------------------------------------
+    # 6. Start the Python bridge
+    # -----------------------------------------------------
 
-# Keep main process alive to ensure port 8080 stays open for Railway
+    echo "Starting the MT5 Python bridge..."
+
+    python3 -m mt5linux \
+        --host 0.0.0.0 \
+        --port 8001 \
+        >/var/log/mt5/bridge.log 2>&1 &
+
+    echo "Python bridge PID: $!"
+
+    echo "Background initialization completed."
+
+) >/var/log/mt5/initialization.log 2>&1 &
+
+# ---------------------------------------------------------
+# 7. Keep the container alive and monitor services
+# ---------------------------------------------------------
+
+echo "Desktop initialization launched."
+echo "noVNC port: 8080"
+echo "VNC port: 5900"
+echo "Python bridge port: 8001"
+
 while true; do
-    sleep 60
+    if ! pgrep -f 'Xvfb :1 ' >/dev/null 2>&1; then
+        echo "WARNING: Xvfb stopped."
+    fi
+
+    if ! pgrep -f 'websockify.*8080' >/dev/null 2>&1; then
+        echo "WARNING: noVNC web service stopped."
+    fi
+
+    sleep 30
 done
 EOF
 
 RUN chmod +x /entrypoint.sh \
     && dos2unix /entrypoint.sh
 
-EXPOSE 8080 8001
+EXPOSE 8080 8001 5900
 
 CMD ["/bin/bash", "/entrypoint.sh"]
