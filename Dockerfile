@@ -93,7 +93,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Autonomous Stable Deployment Boot"
+echo "Railway Autonomous MT5 Direct Launch Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -135,7 +135,7 @@ websockify \
 echo "Web interface active on port 8080."
 
 # =========================================================
-# 2. AUTOMATED EXTRACTION & PORTABLE LAUNCH
+# 2. BYPASS INSTALLER & LAUNCH TERMINAL DIRECTLY
 # =========================================================
 
 (
@@ -146,7 +146,7 @@ echo "Web interface active on port 8080."
     MT5_EXE="$MT5_DIR/terminal64.exe"
 
     if [ ! -f "$MT5_EXE" ]; then
-        echo "Executing autonomous extraction sequence..."
+        echo "Extracting setup binaries directly..."
         cd /root
         rm -f mt5setup.exe
         wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe || true
@@ -159,12 +159,12 @@ echo "Web interface active on port 8080."
     fi
 
     if [ -f "$MT5_EXE" ]; then
-        echo "Launching MetaTrader 5 in portable mode..."
+        echo "Launching MetaTrader 5 in portable mode with update bypass..."
         cd "$(dirname "$MT5_EXE")"
-        wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
+        wine "$MT5_EXE" /portable /skippedupdate >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 5
     else
-        echo "ERROR: terminal64.exe could not be prepared."
+        echo "ERROR: terminal64.exe not found."
     fi
 
     echo "[3/3] Starting Python mt5linux bridge on port 8001..."
