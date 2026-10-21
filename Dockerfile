@@ -93,7 +93,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Definitive Autonomous Boot"
+echo "Railway Definitive Autonomous MT5 Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -135,7 +135,7 @@ websockify \
 echo "Web interface active on port 8080."
 
 # =========================================================
-# 2. DEFINITIVE EXTRACTION & LAUNCH SEQUENCE
+# 2. DEFINITIVE BYPASS & LAUNCH SEQUENCE
 # =========================================================
 
 (
@@ -145,23 +145,21 @@ echo "Web interface active on port 8080."
     MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
     MT5_EXE="$MT5_DIR/terminal64.exe"
 
-    if [ ! -f "$MT5_EXE" ]; then
-        echo "Downloading and extracting MetaTrader package..."
-        mkdir -p "$MT5_DIR" /tmp/mt5_dl
-        cd /tmp/mt5_dl
-        
-        wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe -O mt5setup.exe || true
-        cabextract mt5setup.exe || true
-        cp -rf * "$MT5_DIR/" 2>/dev/null || true
+    cd /root
+    if [ ! -f "mt5setup.exe" ]; then
+        echo "Downloading MetaTrader setup package..."
+        wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe || true
     fi
 
     if [ -f "$MT5_EXE" ]; then
-        echo "Launching MetaTrader 5 terminal..."
+        echo "Launching MetaTrader 5..."
         cd "$(dirname "$MT5_EXE")"
-        wine "$MT5_EXE" /portable /skippedupdate >"$LOG_DIR/terminal.log" 2>&1 &
+        wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 5
     else
-        echo "ERROR: terminal64.exe could not be found after extraction."
+        echo "Bypassing web wrapper and initiating silent launch..."
+        cd /root
+        wine mt5setup.exe /auto /skipupdates >"$LOG_DIR/terminal.log" 2>&1 &
     fi
 
     echo "[3/3] Starting Python mt5linux bridge on port 8001..."
@@ -170,7 +168,7 @@ echo "Web interface active on port 8080."
         --port 8001 \
         >"$LOG_DIR/bridge.log" 2>&1 &
 
-    echo "Definitive sequence completed."
+    echo "Autonomous sequence completed."
 
 ) >"$LOG_DIR/initialization.log" 2>&1 &
 
