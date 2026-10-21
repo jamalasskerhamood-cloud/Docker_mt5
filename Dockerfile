@@ -157,8 +157,9 @@ echo "Web interface active on port 8080."
         wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 5
     else
-        echo "Bypassing web wrapper and initiating silent launch..."
+        echo "Bypassing online check and launching silent installer..."
         cd /root
+        # Using correct unattended silent flags to bypass the stub GUI check
         wine mt5setup.exe /auto /skipupdates >"$LOG_DIR/terminal.log" 2>&1 &
     fi
 
