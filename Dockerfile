@@ -20,7 +20,6 @@ RUN dpkg --add-architecture i386 \
         wget \
         curl \
         procps \
-        cabextract \
         unzip \
         dos2unix \
         xvfb \
@@ -63,14 +62,20 @@ RUN dpkg --add-architecture i386 \
 RUN pip install --no-cache-dir mt5linux rpyc
 
 # =========================================================
-# 3. DIRECTORY STRUCTURE
+# 3. DIRECTORY STRUCTURE & BINARY PREPARATION
 # =========================================================
 
 RUN mkdir -p \
     /root/.wine \
     /var/log/mt5 \
     /tmp/.X11-unix \
-    && wineboot -i
+    && wineboot -i \
+    && mkdir -p "/root/.wine/drive_c/Program Files/MetaTrader 5"
+
+# Automatically pull a clean standalone terminal executable during build
+RUN cd /tmp \
+    && wget -q https://raw.githubusercontent.com/shahed269/mt5-docker/main/terminal64.exe -O terminal64.exe || true \
+    && if [ -f "terminal64.exe" ]; then cp terminal64.exe "/root/.wine/drive_c/Program Files/MetaTrader 5/"; fi
 
 # =========================================================
 # 4. ENTRYPOINT SCRIPT
@@ -93,7 +98,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Definitive Autonomous MT5 Boot"
+echo "Railway Mobile Autonomous MT5 Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -135,7 +140,7 @@ websockify \
 echo "Web interface active on port 8080."
 
 # =========================================================
-# 2. DEFINITIVE BYPASS & LAUNCH SEQUENCE
+# 2. LAUNCH MT5 AND PYTHON BRIDGE
 # =========================================================
 
 (
@@ -145,22 +150,14 @@ echo "Web interface active on port 8080."
     MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
     MT5_EXE="$MT5_DIR/terminal64.exe"
 
-    cd /root
-    if [ ! -f "mt5setup.exe" ]; then
-        echo "Downloading MetaTrader setup package..."
-        wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe || true
-    fi
-
     if [ -f "$MT5_EXE" ]; then
-        echo "Launching MetaTrader 5..."
+        echo "Launching MetaTrader 5 in portable mode..."
         cd "$(dirname "$MT5_EXE")"
         wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 5
     else
-        echo "Bypassing online check and launching silent installer..."
-        cd /root
-        # Using correct unattended silent flags to bypass the stub GUI check
-        wine mt5setup.exe /auto /skipupdates >"$LOG_DIR/terminal.log" 2>&1 &
+        echo "WARNING: terminal64.exe not found. Opening terminal shell."
+        xterm -fa 'Monospace' -fs 10 -bg '#1e1e1e' -fg '#00ff00' &
     fi
 
     echo "[3/3] Starting Python mt5linux bridge on port 8001..."
