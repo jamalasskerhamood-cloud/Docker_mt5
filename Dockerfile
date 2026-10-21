@@ -93,7 +93,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Autonomous Silent-Install Boot"
+echo "Railway Autonomous Offline-Bypass Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -135,7 +135,7 @@ websockify \
 echo "Web interface active on port 8080."
 
 # =========================================================
-# 2. AUTONOMOUS WINE SETUP & SILENT INSTALLATION
+# 2. OFFLINE BYPASS & TERMINAL INITIALIZATION
 # =========================================================
 
 (
@@ -146,32 +146,25 @@ echo "Web interface active on port 8080."
     MT5_EXE="$MT5_DIR/terminal64.exe"
 
     if [ ! -f "$MT5_EXE" ]; then
-        echo "Downloading official setup package..."
+        echo "Attempting installer bypass extraction..."
         cd /tmp
-        rm -f mt5setup.exe
         wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe || true
-
-        if [ -f "mt5setup.exe" ]; then
-            echo "Running automated silent installation via Wine..."
-            # /auto flag tells the MetaTrader installer to run completely unattended without a GUI wizard
-            wine mt5setup.exe /auto || true
-            sleep 15
-        fi
+        
+        # Force unpack using cabextract directly, ignoring online checks
+        cabextract -d /tmp/extracted mt5setup.exe || true
+        mkdir -p "$MT5_DIR"
+        cp -rf /tmp/extracted/* "$MT5_DIR/" 2>/dev/null || true
     fi
 
-    # Search for terminal if installed to a custom path
-    if [ ! -f "$MT5_EXE" ]; then
-        FOUND_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
-        [ -n "$FOUND_EXE" ] && MT5_EXE="$FOUND_EXE"
-    fi
-
-    if [ -n "$MT5_EXE" ] && [ -f "$MT5_EXE" ]; then
+    # If terminal executable is still missing, fallback to creating a dummy portable structure or launching interactive recovery shell
+    if [ -f "$MT5_EXE" ]; then
         echo "Launching MetaTrader 5 in portable mode..."
         cd "$(dirname "$MT5_EXE")"
         wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 5
     else
-        echo "NOTICE: Launching fallback desktop shell."
+        echo "WARNING: Online installer blocked. Opening interactive recovery shell."
+        xterm -fa 'Monospace' -fs 10 -bg '#1e1e1e' -fg '#00ff00' &
     fi
 
     echo "[3/3] Starting Python mt5linux bridge on port 8001..."
@@ -180,7 +173,7 @@ echo "Web interface active on port 8080."
         --port 8001 \
         >"$LOG_DIR/bridge.log" 2>&1 &
 
-    echo "Autonomous startup sequence completed."
+    echo "Autonomous sequence completed."
 
 ) >"$LOG_DIR/initialization.log" 2>&1 &
 
