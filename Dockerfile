@@ -93,7 +93,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Autonomous Offline-Bypass Boot"
+echo "Railway Autonomous Stable Deployment Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -135,36 +135,36 @@ websockify \
 echo "Web interface active on port 8080."
 
 # =========================================================
-# 2. OFFLINE BYPASS & TERMINAL INITIALIZATION
+# 2. AUTOMATED EXTRACTION & PORTABLE LAUNCH
 # =========================================================
 
 (
     set +e
     wine reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
 
-    MT5_DIR="/root/.wine/drive_c/Program Files/MetaTrader 5"
+    MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
     MT5_EXE="$MT5_DIR/terminal64.exe"
 
     if [ ! -f "$MT5_EXE" ]; then
-        echo "Attempting installer bypass extraction..."
-        cd /tmp
+        echo "Executing autonomous extraction sequence..."
+        cd /root
+        rm -f mt5setup.exe
         wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe || true
         
-        # Force unpack using cabextract directly, ignoring online checks
-        cabextract -d /tmp/extracted mt5setup.exe || true
-        mkdir -p "$MT5_DIR"
-        cp -rf /tmp/extracted/* "$MT5_DIR/" 2>/dev/null || true
+        if [ -f "mt5setup.exe" ]; then
+            cabextract mt5setup.exe || true
+            mkdir -p "$MT5_DIR"
+            cp -rf * "$MT5_DIR/" || true
+        fi
     fi
 
-    # If terminal executable is still missing, fallback to creating a dummy portable structure or launching interactive recovery shell
     if [ -f "$MT5_EXE" ]; then
         echo "Launching MetaTrader 5 in portable mode..."
         cd "$(dirname "$MT5_EXE")"
         wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 5
     else
-        echo "WARNING: Online installer blocked. Opening interactive recovery shell."
-        xterm -fa 'Monospace' -fs 10 -bg '#1e1e1e' -fg '#00ff00' &
+        echo "ERROR: terminal64.exe could not be prepared."
     fi
 
     echo "[3/3] Starting Python mt5linux bridge on port 8001..."
