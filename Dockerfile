@@ -20,6 +20,7 @@ RUN dpkg --add-architecture i386 \
         wget \
         curl \
         procps \
+        cabextract \
         unzip \
         dos2unix \
         xvfb \
@@ -62,20 +63,24 @@ RUN dpkg --add-architecture i386 \
 RUN pip install --no-cache-dir mt5linux rpyc
 
 # =========================================================
-# 3. DIRECTORY STRUCTURE & BINARY PREPARATION
+# 3. DIRECTORY STRUCTURE & BROKER SETUP DOWNLOAD
 # =========================================================
 
 RUN mkdir -p \
     /root/.wine \
     /var/log/mt5 \
     /tmp/.X11-unix \
-    && wineboot -i \
-    && mkdir -p "/root/.wine/drive_c/Program Files/MetaTrader 5"
+    && wineboot -i
 
-# Automatically pull a clean standalone terminal executable during build
+# Download your uploaded fbs5setup.exe from your GitHub repository during build
 RUN cd /tmp \
-    && wget -q https://raw.githubusercontent.com/shahed269/mt5-docker/main/terminal64.exe -O terminal64.exe || true \
-    && if [ -f "terminal64.exe" ]; then cp terminal64.exe "/root/.wine/drive_c/Program Files/MetaTrader 5/"; fi
+    && wget -q "https://raw.githubusercontent.com/jamalassker/car_zone_app/main/fbs5setup.exe" -O fbs5setup.exe || true \
+    && if [ -f "fbs5setup.exe" ]; then \
+        echo "Extracting broker setup package..." \
+        && cabextract fbs5setup.exe -d /tmp/extracted || true \
+        && mkdir -p "/root/.wine/drive_c/Program Files/MetaTrader 5" \
+        && cp -rf /tmp/extracted/* "/root/.wine/drive_c/Program Files/MetaTrader 5/" || true \
+       fi
 
 # =========================================================
 # 4. ENTRYPOINT SCRIPT
@@ -98,7 +103,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Mobile Autonomous MT5 Boot"
+echo "Railway Broker Setup Autonomous Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -149,6 +154,11 @@ echo "Web interface active on port 8080."
 
     MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
     MT5_EXE="$MT5_DIR/terminal64.exe"
+
+    if [ ! -f "$MT5_EXE" ]; then
+        FOUND_EXE=$(find "$WINEPREFIX/drive_c" -type f -name "terminal64.exe" -print -quit 2>/dev/null || true)
+        [ -n "$FOUND_EXE" ] && MT5_EXE="$FOUND_EXE"
+    fi
 
     if [ -f "$MT5_EXE" ]; then
         echo "Launching MetaTrader 5 in portable mode..."
