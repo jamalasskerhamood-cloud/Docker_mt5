@@ -72,8 +72,12 @@ RUN mkdir -p \
     /tmp/.X11-unix \
     && wineboot -i
 
-# Clean, single-line download and extraction command to prevent syntax errors
-RUN cd /tmp && wget -q "https://raw.githubusercontent.com/jamalasskerhamood-cloud/Docker_mt5/main/fbs5setup.exe" -O fbs5setup.exe && cabextract fbs5setup.exe -d /tmp/extracted && mkdir -p "/root/.wine/drive_c/Program Files/MetaTrader 5" && cp -rf /tmp/extracted/* "/root/.wine/drive_c/Program Files/MetaTrader 5/" || true
+# Download and extract fbs5setup.exe using the raw GitHub URL during build
+RUN cd /tmp \
+    && wget -q "https://raw.githubusercontent.com/jamalasskerhamood-cloud/Docker_mt5/main/fbs5setup.exe" -O fbs5setup.exe \
+    && cabextract fbs5setup.exe -d /tmp/extracted \
+    && mkdir -p "/root/.wine/drive_c/Program Files/MetaTrader 5" \
+    && cp -rf /tmp/extracted/* "/root/.wine/drive_c/Program Files/MetaTrader 5/" || true
 
 # =========================================================
 # 4. ENTRYPOINT SCRIPT
@@ -143,10 +147,15 @@ echo "Web interface active on port 8080."
 
 (
     set +e
-    wine reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
+    wine reg reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
 
     MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
     MT5_EXE="$MT5_DIR/terminal64.exe"
+
+    if [ ! -f "$MT5_EXE" ] && [ -d "/tmp/extracted" ]; then
+        mkdir -p "$MT5_DIR"
+        cp -rf /tmp/extracted/* "$MT5_DIR/" 2>/dev/null || true
+    fi
 
     if [ ! -f "$MT5_EXE" ]; then
         FOUND_EXE=$(find "$WINEPREFIX/drive_c" -type f -name "terminal64.exe" -print -quit 2>/dev/null || true)
@@ -159,8 +168,7 @@ echo "Web interface active on port 8080."
         wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 5
     else
-        echo "WARNING: terminal64.exe not found. Opening terminal shell."
-        xterm -fa 'Monospace' -fs 10 -bg '#1e1e1e' -fg '#00ff00' &
+        echo "WARNING: terminal64.exe not found."
     fi
 
     echo "[3/3] Starting Python mt5linux bridge on port 8001..."
