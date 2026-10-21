@@ -93,7 +93,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Definitive MT5 Autonomous Boot"
+echo "Railway Definitive Autonomous Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -135,7 +135,7 @@ websockify \
 echo "Web interface active on port 8080."
 
 # =========================================================
-# 2. DEFINITIVE EXTRACTION & DIRECT LAUNCH
+# 2. DEFINITIVE EXTRACTION & LAUNCH SEQUENCE
 # =========================================================
 
 (
@@ -146,31 +146,22 @@ echo "Web interface active on port 8080."
     MT5_EXE="$MT5_DIR/terminal64.exe"
 
     if [ ! -f "$MT5_EXE" ]; then
-        echo "Performing clean extraction into correct directory..."
-        mkdir -p /tmp/mt5_extracted "$MT5_DIR"
-        cd /tmp/mt5_extracted
+        echo "Downloading and extracting MetaTrader package..."
+        mkdir -p "$MT5_DIR" /tmp/mt5_dl
+        cd /tmp/mt5_dl
         
         wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe -O mt5setup.exe || true
         cabextract mt5setup.exe || true
-        
-        # Safely move extracted files directly to Program Files/MetaTrader 5
-        cp -rf /tmp/mt5_extracted/* "$MT5_DIR/" 2>/dev/null || true
-    fi
-
-    # Fallback search across drive_c if path varies
-    if [ ! -f "$MT5_EXE" ]; then
-        FOUND_EXE=$(find "$WINEPREFIX/drive_c" -type f -name "terminal64.exe" -print -quit 2>/dev/null || true)
-        [ -n "$FOUND_EXE" ] && MT5_EXE="$FOUND_EXE"
+        cp -rf * "$MT5_DIR/" 2>/dev/null || true
     fi
 
     if [ -f "$MT5_EXE" ]; then
-        echo "Launching MetaTrader 5 in portable mode..."
+        echo "Launching MetaTrader 5 terminal..."
         cd "$(dirname "$MT5_EXE")"
         wine "$MT5_EXE" /portable /skippedupdate >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 5
     else
-        echo "WARNING: terminal64.exe could not be resolved. Launching recovery terminal."
-        xterm -fa 'Monospace' -fs 10 -bg '#1e1e1e' -fg '#00ff00' &
+        echo "ERROR: terminal64.exe could not be found after extraction."
     fi
 
     echo "[3/3] Starting Python mt5linux bridge on port 8001..."
