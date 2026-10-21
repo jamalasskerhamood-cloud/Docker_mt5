@@ -63,15 +63,14 @@ RUN dpkg --add-architecture i386 \
 RUN pip install --no-cache-dir mt5linux rpyc
 
 # =========================================================
-# 3. DIRECTORY STRUCTURE & WINE BOOTSTRAP
+# 3. DIRECTORY STRUCTURE
 # =========================================================
 
 RUN mkdir -p \
     /root/.wine \
     /var/log/mt5 \
     /tmp/.X11-unix \
-    && wineboot -i \
-    && mkdir -p "/root/.wine/drive_c/Program Files/MetaTrader 5"
+    && wineboot -i
 
 # =========================================================
 # 4. ENTRYPOINT SCRIPT
@@ -94,7 +93,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Autonomous MT5 Deployment Boot"
+echo "Railway Autonomous Silent-Install Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -136,7 +135,7 @@ websockify \
 echo "Web interface active on port 8080."
 
 # =========================================================
-# 2. AUTONOMOUS FILE RESOLUTION & LAUNCH
+# 2. AUTONOMOUS WINE SETUP & SILENT INSTALLATION
 # =========================================================
 
 (
@@ -146,21 +145,33 @@ echo "Web interface active on port 8080."
     MT5_DIR="/root/.wine/drive_c/Program Files/MetaTrader 5"
     MT5_EXE="$MT5_DIR/terminal64.exe"
 
-    # If terminal executable is missing, download a lightweight working binary mirror autonomously
     if [ ! -f "$MT5_EXE" ]; then
-        echo "Fetching autonomous terminal binary..."
-        mkdir -p "$MT5_DIR"
-        curl -sL https://raw.githubusercontent.com/shahed269/mt5-docker/main/terminal64.exe -o "$MT5_EXE" || true
+        echo "Downloading official setup package..."
+        cd /tmp
+        rm -f mt5setup.exe
+        wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe || true
+
+        if [ -f "mt5setup.exe" ]; then
+            echo "Running automated silent installation via Wine..."
+            # /auto flag tells the MetaTrader installer to run completely unattended without a GUI wizard
+            wine mt5setup.exe /auto || true
+            sleep 15
+        fi
     fi
 
-    if [ -f "$MT5_EXE" ]; then
+    # Search for terminal if installed to a custom path
+    if [ ! -f "$MT5_EXE" ]; then
+        FOUND_EXE=$(find "$WINEPREFIX/drive_c" -type f \( -iname "terminal64.exe" -o -iname "terminal.exe" \) -print -quit 2>/dev/null || true)
+        [ -n "$FOUND_EXE" ] && MT5_EXE="$FOUND_EXE"
+    fi
+
+    if [ -n "$MT5_EXE" ] && [ -f "$MT5_EXE" ]; then
         echo "Launching MetaTrader 5 in portable mode..."
         cd "$(dirname "$MT5_EXE")"
         wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 5
     else
-        echo "NOTICE: Running fallback visual terminal workspace."
-        xterm -fa 'Monospace' -fs 10 -bg '#1e1e1e' -fg '#00ff00' &
+        echo "NOTICE: Launching fallback desktop shell."
     fi
 
     echo "[3/3] Starting Python mt5linux bridge on port 8001..."
@@ -169,7 +180,7 @@ echo "Web interface active on port 8080."
         --port 8001 \
         >"$LOG_DIR/bridge.log" 2>&1 &
 
-    echo "Autonomous sequence completed."
+    echo "Autonomous startup sequence completed."
 
 ) >"$LOG_DIR/initialization.log" 2>&1 &
 
