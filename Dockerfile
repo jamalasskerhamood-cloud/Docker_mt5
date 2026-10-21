@@ -72,15 +72,8 @@ RUN mkdir -p \
     /tmp/.X11-unix \
     && wineboot -i
 
-# Download fbs5setup.exe using the correct raw GitHub URL
-RUN cd /tmp \
-    && wget -q "https://raw.githubusercontent.com/jamalasskerhamood-cloud/Docker_mt5/main/fbs5setup.exe" -O fbs5setup.exe || true \
-    && if [ -f "fbs5setup.exe" ]; then \
-        echo "Extracting broker setup package..." \
-        && cabextract fbs5setup.exe -d /tmp/extracted || true \
-        && mkdir -p "/root/.wine/drive_c/Program Files/MetaTrader 5" \
-        && cp -rf /tmp/extracted/* "/root/.wine/drive_c/Program Files/MetaTrader 5/" || true \
-       fi
+# Clean, single-line download and extraction command to prevent syntax errors
+RUN cd /tmp && wget -q "https://raw.githubusercontent.com/jamalasskerhamood-cloud/Docker_mt5/main/fbs5setup.exe" -O fbs5setup.exe && cabextract fbs5setup.exe -d /tmp/extracted && mkdir -p "/root/.wine/drive_c/Program Files/MetaTrader 5" && cp -rf /tmp/extracted/* "/root/.wine/drive_c/Program Files/MetaTrader 5/" || true
 
 # =========================================================
 # 4. ENTRYPOINT SCRIPT
