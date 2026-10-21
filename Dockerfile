@@ -20,6 +20,7 @@ RUN dpkg --add-architecture i386 \
         wget \
         curl \
         procps \
+        cabextract \
         unzip \
         dos2unix \
         xvfb \
@@ -92,7 +93,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway MT5 Direct Portable Archive Boot"
+echo "Railway Fully Automated Autonomous MT5 Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -135,51 +136,53 @@ websockify \
 echo "Web interface active on port 8080."
 
 # =========================================================
-# 2. AUTOMATED DIRECT PORTABLE DEPLOYMENT
-# =========================================================
-
-xterm -fa 'Monospace' -fs 10 -bg '#1e1e1e' -fg '#00ff00' -title "MT5 Automated Setup" -e "
-echo 'Initializing Wine Environment...'
-wineboot -i
-wine reg add 'HKCU\\Software\\Wine\\WineDbg' /v 'ShowCrashDialog' /t REG_DWORD /d 0 /f || true
-
-MT5_DIR='/root/.wine/drive_c/Program Files/MetaTrader 5'
-mkdir -p \"\$MT5_DIR\"
-
-echo 'Checking terminal binary...'
-if [ ! -f \"\$MT5_DIR/terminal64.exe\" ]; then
-    echo 'Downloading direct portable MetaTrader package...'
-    cd /tmp
-    # Alternative direct mirror containing packed terminal binaries
-    wget -q https://github.com/shahed269/mt5-docker/raw/main/mt5.zip -O mt5.zip || true
-    if [ -f \"mt5.zip\" ]; then
-        unzip -qo mt5.zip -d /tmp/mt5_unpacked || true
-        cp -rf /tmp/mt5_unpacked/* \"\$MT5_DIR/\" || true
-    fi
-fi
-
-MT5_EXE=\$(find \"/root/.wine/drive_c\" -type f -name \"terminal64.exe\" -print -quit)
-
-if [ -n \"\$MT5_EXE\" ]; then
-    echo 'Launching MetaTrader 5 in portable mode...'
-    cd \"\$(dirname \"\$MT5_EXE\")\"
-    wine \"\$MT5_EXE\" /portable
-else
-    echo 'WARNING: Portable package not found. You can drop files manually or use shell.'
-    bash
-fi
-" &
-
-# =========================================================
-# 3. BACKGROUND PYTHON BRIDGE
+# 2. AUTONOMOUS BACKGROUND INSTALLATION & LAUNCH
 # =========================================================
 
 (
     set +e
+    echo "[3/4] Initializing Wine prefix environment..."
+    wineboot -i >"$LOG_DIR/wineboot.log" 2>&1
+    
     for i in $(seq 1 90); do
         [ -f "$WINEPREFIX/system.reg" ] && break
         sleep 1
     done
+
+    wine reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
+
+    MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
+    mkdir -p "$MT5_DIR"
+
+    # Fully autonomous download using MetaQuotes direct distribution channel
+    cd /tmp
+    rm -f mt5setup.exe
+    echo "Downloading official MetaTrader package..."
+    curl -sL https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe -o mt5setup.exe
+
+    if [ -f "mt5setup.exe" ]; then
+        echo "Attempting cabinet extraction..."
+        cabextract -d /tmp/mt5_unpacked mt5setup.exe || true
+        if [ -d "/tmp/mt5_unpacked" ]; then
+            cp -rf /tmp/mt5_unpacked/* "$MT5_DIR/" || true
+        fi
+    fi
+
+    # Fallback to direct download of a known terminal binary mirror if extraction fails
+    MT5_EXE="$MT5_DIR/terminal64.exe"
+    if [ ! -f "$MT5_EXE" ]; then
+        echo "Applying autonomous fallback download..."
+        curl -sL https://raw.githubusercontent.com/shahed269/mt5-docker/main/terminal64.exe -o "$MT5_DIR/terminal64.exe" || true
+    fi
+
+    if [ -f "$MT5_EXE" ]; then
+        echo "Launching MetaTrader 5 in portable mode autonomously..."
+        cd "$(dirname "$MT5_EXE")"
+        wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
+        sleep 5
+    else
+        echo "CRITICAL: Autonomous binary deployment failed."
+    fi
 
     echo "[4/4] Starting Python mt5linux bridge on port 8001..."
     python3 -m mt5linux \
@@ -187,12 +190,12 @@ fi
         --port 8001 \
         >"$LOG_DIR/bridge.log" 2>&1 &
 
-    echo "Background sequence completed."
+    echo "Autonomous background sequence completed."
 
 ) >"$LOG_DIR/initialization.log" 2>&1 &
 
 # =========================================================
-# 4. KEEP CONTAINER ALIVE
+# 3. KEEP CONTAINER ALIVE
 # =========================================================
 
 echo "Container is running and healthy."
