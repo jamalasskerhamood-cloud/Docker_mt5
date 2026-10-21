@@ -72,9 +72,9 @@ RUN mkdir -p \
     /tmp/.X11-unix \
     && wineboot -i
 
-# Download your uploaded fbs5setup.exe from your GitHub repository during build
+# Download fbs5setup.exe using the correct raw GitHub URL
 RUN cd /tmp \
-    && wget -q "https://raw.githubusercontent.com/jamalassker/car_zone_app/main/fbs5setup.exe" -O fbs5setup.exe || true \
+    && wget -q "https://raw.githubusercontent.com/jamalasskerhamood-cloud/Docker_mt5/main/fbs5setup.exe" -O fbs5setup.exe || true \
     && if [ -f "fbs5setup.exe" ]; then \
         echo "Extracting broker setup package..." \
         && cabextract fbs5setup.exe -d /tmp/extracted || true \
