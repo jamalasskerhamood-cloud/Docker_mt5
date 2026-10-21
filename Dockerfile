@@ -63,14 +63,18 @@ RUN dpkg --add-architecture i386 \
 RUN pip install --no-cache-dir mt5linux rpyc
 
 # =========================================================
-# 3. DIRECTORY STRUCTURE
+# 3. PRE-BUILD WINE ENVIRONMENT & MT5 SETUP
 # =========================================================
 
-RUN mkdir -p \
-    /root/.wine \
-    /root/mt5 \
-    /var/log/mt5 \
-    /tmp/.X11-unix
+RUN mkdir -p /root/.wine /var/log/mt5 /tmp/.X11-unix \
+    && wineboot -i \
+    && mkdir -p "/root/.wine/drive_c/Program Files/MetaTrader 5"
+
+# Download and bake official setup during build to guarantee availability
+RUN cd /tmp \
+    && wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe -O mt5setup.exe || true \
+    && cabextract mt5setup.exe -d /tmp/extracted || true \
+    && if [ -d "/tmp/extracted" ]; then cp -rf /tmp/extracted/* "/root/.wine/drive_c/Program Files/MetaTrader 5/" || true; fi
 
 # =========================================================
 # 4. ENTRYPOINT SCRIPT
@@ -93,7 +97,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Fully Automated Autonomous MT5 Boot"
+echo "Railway Fully Autonomous Pre-built MT5 Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -102,7 +106,7 @@ echo "=================================================="
 # 1. START DISPLAY & WEB PORT 8080 IMMEDIATELY (Healthcheck)
 # =========================================================
 
-echo "[1/4] Starting Xvfb and Fluxbox..."
+echo "[1/3] Starting Xvfb, Fluxbox, and Web Bridge..."
 pkill -f 'Xvfb :1' 2>/dev/null || true
 pkill -x x11vnc 2>/dev/null || true
 pkill -x websockify 2>/dev/null || true
@@ -117,7 +121,6 @@ sleep 1
 
 xsetroot -solid "#2d2d2d" -display :1 || true
 
-echo "[2/4] Starting VNC on port 5900 & noVNC on port 8080..."
 x11vnc \
     -display :1 \
     -forever \
@@ -136,61 +139,32 @@ websockify \
 echo "Web interface active on port 8080."
 
 # =========================================================
-# 2. AUTONOMOUS BACKGROUND INSTALLATION & LAUNCH
+# 2. LAUNCH MT5 AND PYTHON BRIDGE
 # =========================================================
 
 (
     set +e
-    echo "[3/4] Initializing Wine prefix environment..."
-    wineboot -i >"$LOG_DIR/wineboot.log" 2>&1
-    
-    for i in $(seq 1 90); do
-        [ -f "$WINEPREFIX/system.reg" ] && break
-        sleep 1
-    done
-
     wine reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
 
-    MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
-    mkdir -p "$MT5_DIR"
-
-    # Fully autonomous download using MetaQuotes direct distribution channel
-    cd /tmp
-    rm -f mt5setup.exe
-    echo "Downloading official MetaTrader package..."
-    curl -sL https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe -o mt5setup.exe
-
-    if [ -f "mt5setup.exe" ]; then
-        echo "Attempting cabinet extraction..."
-        cabextract -d /tmp/mt5_unpacked mt5setup.exe || true
-        if [ -d "/tmp/mt5_unpacked" ]; then
-            cp -rf /tmp/mt5_unpacked/* "$MT5_DIR/" || true
-        fi
-    fi
-
-    # Fallback to direct download of a known terminal binary mirror if extraction fails
+    MT5_DIR="/root/.wine/drive_c/Program Files/MetaTrader 5"
     MT5_EXE="$MT5_DIR/terminal64.exe"
-    if [ ! -f "$MT5_EXE" ]; then
-        echo "Applying autonomous fallback download..."
-        curl -sL https://raw.githubusercontent.com/shahed269/mt5-docker/main/terminal64.exe -o "$MT5_DIR/terminal64.exe" || true
-    fi
 
     if [ -f "$MT5_EXE" ]; then
-        echo "Launching MetaTrader 5 in portable mode autonomously..."
+        echo "Launching MetaTrader 5 in portable mode..."
         cd "$(dirname "$MT5_EXE")"
         wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 5
     else
-        echo "CRITICAL: Autonomous binary deployment failed."
+        echo "WARNING: terminal64.exe not found in pre-built path."
     fi
 
-    echo "[4/4] Starting Python mt5linux bridge on port 8001..."
+    echo "[3/3] Starting Python mt5linux bridge on port 8001..."
     python3 -m mt5linux \
         --host 0.0.0.0 \
         --port 8001 \
         >"$LOG_DIR/bridge.log" 2>&1 &
 
-    echo "Autonomous background sequence completed."
+    echo "Autonomous startup sequence completed."
 
 ) >"$LOG_DIR/initialization.log" 2>&1 &
 
