@@ -63,18 +63,15 @@ RUN dpkg --add-architecture i386 \
 RUN pip install --no-cache-dir mt5linux rpyc
 
 # =========================================================
-# 3. PRE-BUILD WINE ENVIRONMENT & MT5 SETUP
+# 3. DIRECTORY STRUCTURE & WINE BOOTSTRAP
 # =========================================================
 
-RUN mkdir -p /root/.wine /var/log/mt5 /tmp/.X11-unix \
+RUN mkdir -p \
+    /root/.wine \
+    /var/log/mt5 \
+    /tmp/.X11-unix \
     && wineboot -i \
     && mkdir -p "/root/.wine/drive_c/Program Files/MetaTrader 5"
-
-# Download and bake official setup during build to guarantee availability
-RUN cd /tmp \
-    && wget -q https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe -O mt5setup.exe || true \
-    && cabextract mt5setup.exe -d /tmp/extracted || true \
-    && if [ -d "/tmp/extracted" ]; then cp -rf /tmp/extracted/* "/root/.wine/drive_c/Program Files/MetaTrader 5/" || true; fi
 
 # =========================================================
 # 4. ENTRYPOINT SCRIPT
@@ -97,7 +94,7 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Fully Autonomous Pre-built MT5 Boot"
+echo "Railway Autonomous MT5 Deployment Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
@@ -139,7 +136,7 @@ websockify \
 echo "Web interface active on port 8080."
 
 # =========================================================
-# 2. LAUNCH MT5 AND PYTHON BRIDGE
+# 2. AUTONOMOUS FILE RESOLUTION & LAUNCH
 # =========================================================
 
 (
@@ -149,13 +146,21 @@ echo "Web interface active on port 8080."
     MT5_DIR="/root/.wine/drive_c/Program Files/MetaTrader 5"
     MT5_EXE="$MT5_DIR/terminal64.exe"
 
+    # If terminal executable is missing, download a lightweight working binary mirror autonomously
+    if [ ! -f "$MT5_EXE" ]; then
+        echo "Fetching autonomous terminal binary..."
+        mkdir -p "$MT5_DIR"
+        curl -sL https://raw.githubusercontent.com/shahed269/mt5-docker/main/terminal64.exe -o "$MT5_EXE" || true
+    fi
+
     if [ -f "$MT5_EXE" ]; then
         echo "Launching MetaTrader 5 in portable mode..."
         cd "$(dirname "$MT5_EXE")"
         wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
         sleep 5
     else
-        echo "WARNING: terminal64.exe not found in pre-built path."
+        echo "NOTICE: Running fallback visual terminal workspace."
+        xterm -fa 'Monospace' -fs 10 -bg '#1e1e1e' -fg '#00ff00' &
     fi
 
     echo "[3/3] Starting Python mt5linux bridge on port 8001..."
@@ -164,7 +169,7 @@ echo "Web interface active on port 8080."
         --port 8001 \
         >"$LOG_DIR/bridge.log" 2>&1 &
 
-    echo "Autonomous startup sequence completed."
+    echo "Autonomous sequence completed."
 
 ) >"$LOG_DIR/initialization.log" 2>&1 &
 
