@@ -72,7 +72,7 @@ RUN mkdir -p \
     /tmp/.X11-unix \
     && wineboot -i
 
-# Download and extract fbs5setup.exe using the raw GitHub URL during build
+# Download fbs5setup.exe from your GitHub repository during build
 RUN cd /tmp \
     && wget -q "https://raw.githubusercontent.com/jamalasskerhamood-cloud/Docker_mt5/main/fbs5setup.exe" -O fbs5setup.exe \
     && cabextract fbs5setup.exe -d /tmp/extracted \
@@ -100,99 +100,29 @@ mkdir -p "$LOG_DIR" "$WINEPREFIX" /tmp/.X11-unix
 exec > >(tee -a "$LOG_DIR/startup.log") 2>&1
 
 echo "=================================================="
-echo "Railway Broker Setup Autonomous Boot"
+echo "Container Autonomous Boot"
 echo "Date: $(date)"
 echo "Wine Version: $(wine --version)"
 echo "=================================================="
 
-# =========================================================
-# 1. START DISPLAY & WEB PORT 8080 IMMEDIATELY (Healthcheck)
-# =========================================================
-
-echo "[1/3] Starting Xvfb, Fluxbox, and Web Bridge..."
+# Start display and VNC web bridge in the background
 pkill -f 'Xvfb :1' 2>/dev/null || true
 pkill -x x11vnc 2>/dev/null || true
 pkill -x websockify 2>/dev/null || true
 pkill -x fluxbox 2>/dev/null || true
 
-Xvfb :1 -screen 0 1280x1024x24 -ac -nolisten tcp \
-    >"$LOG_DIR/xvfb.log" 2>&1 &
+Xvfb :1 -screen 0 1280x1024x24 -ac -nolisten tcp >"$LOG_DIR/xvfb.log" 2>&1 &
 sleep 2
 
 fluxbox >"$LOG_DIR/fluxbox.log" 2>&1 &
 sleep 1
 
-xsetroot -solid "#2d2d2d" -display :1 || true
+x11vnc -display :1 -forever -shared -nopw -listen 0.0.0.0 -rfbport 5900 >"$LOG_DIR/x11vnc.log" 2>&1 &
+websockify --web=/usr/share/novnc 0.0.0.0:8080 127.0.0.1:5900 >"$LOG_DIR/novnc.log" 2>&1 &
 
-x11vnc \
-    -display :1 \
-    -forever \
-    -shared \
-    -nopw \
-    -listen 0.0.0.0 \
-    -rfbport 5900 \
-    >"$LOG_DIR/x11vnc.log" 2>&1 &
-
-websockify \
-    --web=/usr/share/novnc \
-    0.0.0.0:8080 \
-    127.0.0.1:5900 \
-    >"$LOG_DIR/novnc.log" 2>&1 &
-
-echo "Web interface active on port 8080."
-
-# =========================================================
-# 2. LAUNCH MT5 AND PYTHON BRIDGE
-# =========================================================
-
-(
-    set +e
-    wine reg reg add "HKCU\\Software\\Wine\\WineDbg" /v "ShowCrashDialog" /t REG_DWORD /d 0 /f || true
-
-    MT5_DIR="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
-    MT5_EXE="$MT5_DIR/terminal64.exe"
-
-    if [ ! -f "$MT5_EXE" ] && [ -d "/tmp/extracted" ]; then
-        mkdir -p "$MT5_DIR"
-        cp -rf /tmp/extracted/* "$MT5_DIR/" 2>/dev/null || true
-    fi
-
-    if [ ! -f "$MT5_EXE" ]; then
-        FOUND_EXE=$(find "$WINEPREFIX/drive_c" -type f -name "terminal64.exe" -print -quit 2>/dev/null || true)
-        [ -n "$FOUND_EXE" ] && MT5_EXE="$FOUND_EXE"
-    fi
-
-    if [ -f "$MT5_EXE" ]; then
-        echo "Launching MetaTrader 5 in portable mode..."
-        cd "$(dirname "$MT5_EXE")"
-        wine "$MT5_EXE" /portable >"$LOG_DIR/terminal.log" 2>&1 &
-        sleep 5
-    else
-        echo "WARNING: terminal64.exe not found."
-    fi
-
-    echo "[3/3] Starting Python mt5linux bridge on port 8001..."
-    python3 -m mt5linux \
-        --host 0.0.0.0 \
-        --port 8001 \
-        >"$LOG_DIR/bridge.log" 2>&1 &
-
-    echo "Autonomous sequence completed."
-
-) >"$LOG_DIR/initialization.log" 2>&1 &
-
-# =========================================================
-# 3. KEEP CONTAINER ALIVE
-# =========================================================
-
-echo "Container is running and healthy."
-
-while true; do
-    if ! pgrep -f 'websockify.*8080' >/dev/null 2>&1; then
-        echo "WARNING: noVNC web service stopped."
-    fi
-    sleep 30
-done
+# Execute whatever custom command or script is passed to the container
+echo "Executing user command: $@"
+exec "$@"
 EOF
 
 RUN chmod +x /entrypoint.sh \
@@ -200,4 +130,8 @@ RUN chmod +x /entrypoint.sh \
 
 EXPOSE 8080 8001 5900
 
-CMD ["/bin/bash", "/entrypoint.sh"]
+# Use ENTRYPOINT so arguments passed via CLI or deployment configs are appended to the entrypoint script
+ENTRYPOINT ["/bin/bash", "/entrypoint.sh"]
+
+# Default command if none is specified
+CMD ["python3", "-m", "mt5linux", "--host", "0.0.0.0", "--port", "8001"]
